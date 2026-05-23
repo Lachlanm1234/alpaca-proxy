@@ -13,27 +13,23 @@ app.use((req, res, next) => {
 });
 
 app.use('/alpaca', async (req, res) => {
-  const mode = req.headers['x-alpaca-mode'];
-  const base = mode === 'live'
-    ? 'https://api.alpaca.markets'
-    : 'https://paper-api.alpaca.markets';
+  const base = 'https://paper-api.alpaca.markets';
   const url = base + req.url;
   console.log('Proxying to:', url);
   try {
     const response = await fetch(url, {
       method: req.method,
       headers: {
-        'APCA-API-KEY-ID': req.headers['apca-api-key-id'],
-        'APCA-API-SECRET-KEY': req.headers['apca-api-secret-key'],
+        'APCA-API-KEY-ID': process.env.ALPACA_KEY,
+        'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET,
         'Content-Type': 'application/json',
       },
       body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body),
     });
     const data = await response.json();
-    console.log('Alpaca response status:', response.status);
     res.status(response.status).json(data);
   } catch (err) {
-    console.error('Proxy error:', err.message);
+    console.error('Error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
