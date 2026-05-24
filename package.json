@@ -1,12 +1,13 @@
 {
   "name": "alpaca-proxy",
-  "version": "1.0.0",
-  "main": "server.js",
+  "version": "2.0.0",
+  "main": "agent.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node agent.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "node-cron": "^3.0.3"
   }
 }
