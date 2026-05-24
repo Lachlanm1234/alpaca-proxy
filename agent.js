@@ -408,4 +408,11 @@ app.post('/scan-now', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ ok: true, uptime: process.uptime() }));
 
+// Keep-alive: ping self every 5 minutes to prevent Railway sleep
+setInterval(async () => {
+  try {
+    await fetch('https://alpaca-proxy-production-32ad.up.railway.app/health');
+  } catch(e) {}
+}, 5 * 60 * 1000);
+
 app.listen(3001, () => console.log('🤖 Market Intelligence Agent running on port 3001'));
