@@ -1,6 +1,7 @@
 const express = require('express');
 const fetch = require('node-fetch');
-const cron = require('node-cron');
+let cron;
+try { cron = require('node-cron'); } catch(e) { console.log('node-cron not found, using setInterval fallback'); }
 const fs = require('fs');
 
 const app = express();
@@ -364,8 +365,12 @@ async function runScan() {
 
 // ── SCHEDULER ─────────────────────────────────────────────────────
 // Run every N minutes during market hours (Mon-Fri, 9:30am-4pm ET)
-const cronExpression = `*/${SCAN_INTERVAL} 9-15 * * 1-5`;
-cron.schedule(cronExpression, runScan, { timezone: 'America/New_York' });
+if (cron) {
+  const cronExpression = `*/${SCAN_INTERVAL} 9-15 * * 1-5`;
+  cron.schedule(cronExpression, runScan, { timezone: 'America/New_York' });
+} else {
+  setInterval(runScan, SCAN_INTERVAL * 60 * 1000);
+}
 log('AGENT', `🤖 Autonomous trading agent started. Scanning every ${SCAN_INTERVAL} minutes during market hours.`);
 
 // Run once immediately on startup if market is open
