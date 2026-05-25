@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Market Intelligence</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -13,14 +13,12 @@ body {
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
 }
-
-/* HEADER */
 .header {
   background: rgba(255,255,255,0.85);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid rgba(0,0,0,0.08);
-  padding: 0 40px;
+  padding: 0 20px;
   height: 52px;
   display: flex;
   align-items: center;
@@ -29,152 +27,101 @@ body {
   top: 0;
   z-index: 100;
 }
-.header-left { display: flex; align-items: center; gap: 16px; }
-.logo { font-size: 17px; font-weight: 600; letter-spacing: -0.4px; color: #1d1d1f; }
+.logo { font-size: 17px; font-weight: 600; letter-spacing: -0.4px; }
 .status-pill {
   display: flex; align-items: center; gap: 6px;
   padding: 4px 10px; border-radius: 20px;
   background: #f5f5f7; border: 1px solid rgba(0,0,0,0.08);
   font-size: 12px; font-weight: 500; color: #6e6e73;
 }
-.dot { width: 7px; height: 7px; border-radius: 50%; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .dot-green { background: #34c759; }
 .dot-amber { background: #ff9500; animation: pulse 1.5s infinite; }
 .dot-gray { background: #c7c7cc; }
 .dot-red { background: #ff3b30; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-
-.header-right { display: flex; gap: 8px; }
+.header-actions { display: flex; gap: 8px; }
 .btn {
-  padding: 7px 16px; border-radius: 980px;
+  padding: 7px 14px; border-radius: 980px;
   font-size: 13px; font-weight: 500;
   cursor: pointer; border: none;
   transition: all 0.15s ease;
   font-family: inherit;
+  white-space: nowrap;
 }
 .btn-primary { background: #0071e3; color: white; }
 .btn-primary:hover { background: #0077ed; }
+.btn-primary:disabled { background: #c7c7cc; }
 .btn-secondary { background: rgba(0,0,0,0.06); color: #1d1d1f; }
-.btn-secondary:hover { background: rgba(0,0,0,0.1); }
-
-/* LAYOUT */
-.page { padding: 32px 40px; max-width: 1400px; margin: 0 auto; }
-
-/* STATS ROW */
-.stats-row {
+.page { padding: 16px; max-width: 1400px; margin: 0 auto; }
+.stats-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 12px;
-  margin-bottom: 24px;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
 }
 .stat-card {
   background: white;
-  border-radius: 16px;
-  padding: 20px 22px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
 }
+.stat-card.wide { grid-column: span 2; }
 .stat-label {
-  font-size: 12px;
-  font-weight: 500;
-  color: #6e6e73;
-  letter-spacing: 0.2px;
-  margin-bottom: 8px;
-  text-transform: uppercase;
+  font-size: 11px; font-weight: 500; color: #6e6e73;
+  letter-spacing: 0.3px; margin-bottom: 6px; text-transform: uppercase;
 }
-.stat-value {
-  font-size: 24px;
-  font-weight: 600;
-  letter-spacing: -0.5px;
-  color: #1d1d1f;
-}
+.stat-value { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; color: #1d1d1f; }
 .stat-value.green { color: #34c759; }
 .stat-value.red { color: #ff3b30; }
 .stat-value.blue { color: #0071e3; }
 .stat-value.amber { color: #ff9500; }
-.stat-sub {
-  font-size: 12px;
-  color: #6e6e73;
-  margin-top: 4px;
+.stat-sub { font-size: 11px; color: #6e6e73; margin-top: 3px; }
+.tabs {
+  display: flex; gap: 0;
+  background: rgba(0,0,0,0.06);
+  border-radius: 10px; padding: 2px;
+  margin-bottom: 16px;
 }
-
-/* MAIN GRID */
-.main-grid {
-  display: grid;
-  grid-template-columns: 280px 1fr;
-  gap: 16px;
+.tab {
+  flex: 1; text-align: center;
+  padding: 7px 0; border-radius: 8px;
+  font-size: 13px; font-weight: 500; color: #6e6e73;
+  cursor: pointer; transition: all 0.15s;
+  border: none; background: transparent; font-family: inherit;
 }
-
-/* CARDS */
+.tab.active { background: white; color: #1d1d1f; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
 .card {
-  background: white;
-  border-radius: 18px;
-  padding: 24px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-  margin-bottom: 16px;
+  background: white; border-radius: 16px;
+  padding: 18px; box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  margin-bottom: 12px;
 }
-.card:last-child { margin-bottom: 0; }
 .card-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #6e6e73;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 16px;
+  font-size: 12px; font-weight: 600; color: #6e6e73;
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px;
 }
-
-/* POSITIONS */
+.panel { display: none; }
+.panel.active { display: block; }
 .position-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px 0;
-  border-bottom: 1px solid #f5f5f7;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 0; border-bottom: 1px solid #f5f5f7;
 }
 .position-row:last-child { border-bottom: none; }
-.position-ticker { font-size: 15px; font-weight: 600; color: #1d1d1f; }
-.position-shares { font-size: 12px; color: #6e6e73; margin-top: 2px; }
-.position-pnl { text-align: right; }
-.position-pnl-pct { font-size: 15px; font-weight: 600; }
-.position-pnl-val { font-size: 12px; color: #6e6e73; margin-top: 2px; }
+.position-ticker { font-size: 16px; font-weight: 600; }
+.position-meta { font-size: 12px; color: #6e6e73; margin-top: 2px; }
+.position-pnl-pct { font-size: 16px; font-weight: 600; text-align: right; }
+.position-pnl-val { font-size: 12px; color: #6e6e73; text-align: right; margin-top: 2px; }
 .empty-state { text-align: center; padding: 32px 0; color: #c7c7cc; font-size: 13px; }
-
-/* LOG */
-.log-card {
-  background: white;
-  border-radius: 18px;
-  padding: 24px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-  height: calc(100vh - 280px);
-  overflow-y: auto;
-}
-.log-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #f5f5f7;
-}
-.log-title { font-size: 17px; font-weight: 600; letter-spacing: -0.3px; }
-.log-subtitle { font-size: 12px; color: #6e6e73; margin-top: 2px; }
-.live-badge {
-  display: flex; align-items: center; gap: 5px;
-  font-size: 11px; font-weight: 500; color: #34c759;
-}
-
 .log-entry {
-  padding: 14px 0;
-  border-bottom: 1px solid #f5f5f7;
+  padding: 14px 0; border-bottom: 1px solid #f5f5f7;
   animation: fadeIn 0.3s ease;
 }
 .log-entry:last-child { border-bottom: none; }
 @keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
-
-.log-entry-header { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.log-entry-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
 .log-tag {
   font-size: 10px; font-weight: 600; letter-spacing: 0.5px;
-  padding: 2px 8px; border-radius: 4px;
-  text-transform: uppercase;
+  padding: 2px 8px; border-radius: 4px; text-transform: uppercase;
 }
 .tag-TRADE { background: #d1f5e0; color: #1a7f37; }
 .tag-DECISION { background: #dbeafe; color: #1d4ed8; }
@@ -186,301 +133,297 @@ body {
 .tag-PORTFOLIO { background: #f5f5f7; color: #6e6e73; }
 .tag-AGENT { background: #dbeafe; color: #1d4ed8; }
 .tag-INTELLIGENCE { background: #fce7f3; color: #9d174d; }
-
 .log-ticker { font-size: 12px; font-weight: 700; color: #0071e3; }
-.log-message { font-size: 14px; color: #1d1d1f; line-height: 1.5; }
+.log-msg { font-size: 14px; color: #1d1d1f; line-height: 1.5; }
 .log-thesis { font-size: 12px; color: #6e6e73; font-style: italic; margin-top: 4px; line-height: 1.5; }
 .log-meta { font-size: 11px; color: #c7c7cc; margin-top: 4px; }
-.log-time { font-size: 11px; color: #c7c7cc; margin-top: 6px; }
-
-/* AGENT STATUS */
-.agent-stat-row {
+.log-time { font-size: 11px; color: #c7c7cc; margin-top: 5px; }
+.agent-row {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 8px 0; border-bottom: 1px solid #f5f5f7;
+  padding: 10px 0; border-bottom: 1px solid #f5f5f7;
 }
-.agent-stat-row:last-child { border-bottom: none; }
-.agent-stat-label { font-size: 13px; color: #6e6e73; }
-.agent-stat-value { font-size: 13px; font-weight: 600; color: #1d1d1f; }
-
-/* MODE BANNER */
+.agent-row:last-child { border-bottom: none; }
+.agent-label { font-size: 14px; color: #6e6e73; }
+.agent-value { font-size: 14px; font-weight: 600; }
 .mode-banner {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border-radius: 16px;
-  padding: 20px 24px;
-  margin-bottom: 16px;
-  color: white;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  border-radius: 14px; padding: 16px 18px; margin-bottom: 12px; color: white;
 }
-.mode-banner-title { font-size: 13px; font-weight: 600; opacity: 0.8; margin-bottom: 4px; }
-.mode-banner-value { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
-
+.mode-banner-label { font-size: 11px; font-weight: 600; opacity: 0.8; margin-bottom: 3px; }
+.mode-banner-value { font-size: 18px; font-weight: 700; }
+@media (min-width: 768px) {
+  .page { padding: 28px 32px; }
+  .stats-grid { grid-template-columns: repeat(5, 1fr); }
+  .stat-card.wide { grid-column: span 1; }
+  .stat-value { font-size: 24px; }
+  .tabs { display: none; }
+  .desktop-grid { display: grid; grid-template-columns: 260px 1fr; gap: 16px; }
+  .sidebar { display: block !important; }
+  .log-panel { display: block !important; }
+  .panel { display: block !important; }
+  .log-card { height: calc(100vh - 280px); overflow-y: auto; }
+}
+@media (max-width: 767px) {
+  .desktop-grid { display: block; }
+  .sidebar { display: none; }
+  .log-panel { display: none; }
+}
 ::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #e5e5ea; border-radius: 4px; }
 </style>
 </head>
 <body>
 
-<!-- HEADER -->
 <div class="header">
-  <div class="header-left">
-    <div class="logo">Market Intelligence</div>
+  <div class="logo">Market Intelligence</div>
+  <div style="display:flex;align-items:center;gap:8px">
     <div class="status-pill">
       <span class="dot dot-gray" id="agent-dot"></span>
       <span id="agent-status-text">Connecting...</span>
     </div>
-  </div>
-  <div class="header-right">
-    <button class="btn btn-secondary" onclick="loadAll()">Refresh</button>
-    <button class="btn btn-primary" onclick="triggerScan()">Scan Now</button>
+    <div class="header-actions">
+      <button class="btn btn-secondary" onclick="loadAll()">↻</button>
+      <button class="btn btn-primary" id="scan-btn" onclick="triggerScan()">Scan Now</button>
+    </div>
   </div>
 </div>
 
-<!-- PAGE -->
 <div class="page">
-
-  <!-- STATS ROW -->
-  <div class="stats-row">
+  <div class="stats-grid">
     <div class="stat-card">
       <div class="stat-label">Portfolio</div>
       <div class="stat-value" id="portfolio">—</div>
-      <div class="stat-sub">Paper trading account</div>
+      <div class="stat-sub">Paper account</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Buying Power</div>
       <div class="stat-value green" id="buying-power">—</div>
-      <div class="stat-sub">Available to deploy</div>
+      <div class="stat-sub">Available</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Today's P&L</div>
+      <div class="stat-label">Today P&L</div>
       <div class="stat-value" id="today-pnl">—</div>
-      <div class="stat-sub" id="today-pnl-sub">Since market open</div>
+      <div class="stat-sub">Since open</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Total P&L</div>
       <div class="stat-value" id="total-pnl">—</div>
-      <div class="stat-sub">Since inception</div>
+      <div class="stat-sub">All time</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card wide">
       <div class="stat-label">Market</div>
       <div class="stat-value" id="market-status">—</div>
       <div class="stat-sub" id="market-sub">US Equities</div>
     </div>
   </div>
 
-  <!-- MAIN GRID -->
-  <div class="main-grid">
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('log', this)">Activity</button>
+    <button class="tab" onclick="switchTab('positions', this)">Positions</button>
+    <button class="tab" onclick="switchTab('stats', this)">Agent</button>
+  </div>
 
-    <!-- SIDEBAR -->
-    <div>
-      <!-- Mode -->
+  <div class="desktop-grid">
+    <div class="sidebar">
       <div class="mode-banner">
-        <div class="mode-banner-title">Trading Mode</div>
+        <div class="mode-banner-label">Mode</div>
         <div class="mode-banner-value">Paper Trading</div>
       </div>
-
-      <!-- Agent Stats -->
       <div class="card">
         <div class="card-title">Agent Activity</div>
-        <div class="agent-stat-row">
-          <span class="agent-stat-label">Scans completed</span>
-          <span class="agent-stat-value blue" id="scans-done">—</span>
-        </div>
-        <div class="agent-stat-row">
-          <span class="agent-stat-label">Trades executed</span>
-          <span class="agent-stat-value" id="trades-done">—</span>
-        </div>
-        <div class="agent-stat-row">
-          <span class="agent-stat-label">Last scan</span>
-          <span class="agent-stat-value" id="last-scan">—</span>
-        </div>
-        <div class="agent-stat-row">
-          <span class="agent-stat-label">Open positions</span>
-          <span class="agent-stat-value" id="open-count">—</span>
-        </div>
+        <div class="agent-row"><span class="agent-label">Scans</span><span class="agent-value blue" id="scans-done-d">—</span></div>
+        <div class="agent-row"><span class="agent-label">Trades</span><span class="agent-value" id="trades-done-d">—</span></div>
+        <div class="agent-row"><span class="agent-label">Last scan</span><span class="agent-value" id="last-scan-d">—</span></div>
+        <div class="agent-row"><span class="agent-label">Positions</span><span class="agent-value" id="open-count-d">—</span></div>
       </div>
-
-      <!-- Positions -->
       <div class="card">
         <div class="card-title">Open Positions</div>
-        <div id="positions-list">
-          <div class="empty-state">No open positions</div>
-        </div>
+        <div id="positions-list-d"><div class="empty-state">No positions</div></div>
       </div>
     </div>
 
-    <!-- LOG -->
-    <div class="log-card">
-      <div class="log-header">
-        <div>
-          <div class="log-title">Agent Decision Log</div>
-          <div class="log-subtitle">All activity — trades, analysis, intelligence gathering</div>
-        </div>
-        <div class="live-badge">
-          <span class="dot dot-green"></span>
-          Live
+    <div>
+      <div class="panel active" id="panel-log">
+        <div class="card" style="padding-bottom:0">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+            <div>
+              <div style="font-size:17px;font-weight:600;letter-spacing:-0.3px">Decision Log</div>
+              <div style="font-size:12px;color:#6e6e73;margin-top:2px">Live agent activity</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:5px;font-size:11px;font-weight:500;color:#34c759">
+              <span class="dot dot-green"></span>Live
+            </div>
+          </div>
+          <div id="log-list" class="log-card">
+            <div class="empty-state" style="padding:48px 0">
+              <div style="font-size:28px;margin-bottom:10px">🤖</div>
+              <div style="font-size:15px;font-weight:500;color:#1d1d1f;margin-bottom:4px">Agent running</div>
+              <div style="color:#6e6e73;font-size:13px">Tap "Scan Now" to trigger immediately</div>
+            </div>
+          </div>
         </div>
       </div>
-      <div id="log-list">
-        <div class="empty-state" style="padding: 60px 0;">
-          <div style="font-size:32px;margin-bottom:12px;">🤖</div>
-          <div style="font-size:15px;font-weight:500;color:#1d1d1f;margin-bottom:6px;">Agent is running</div>
-          <div style="color:#6e6e73;">Waiting for first scan. Click "Scan Now" to trigger immediately.</div>
+
+      <div class="panel" id="panel-positions">
+        <div class="mode-banner">
+          <div class="mode-banner-label">Mode</div>
+          <div class="mode-banner-value">Paper Trading</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Open Positions</div>
+          <div id="positions-list-m"><div class="empty-state">No open positions</div></div>
+        </div>
+      </div>
+
+      <div class="panel" id="panel-stats">
+        <div class="card">
+          <div class="card-title">Agent Stats</div>
+          <div class="agent-row"><span class="agent-label">Scans completed</span><span class="agent-value blue" id="scans-done-m">—</span></div>
+          <div class="agent-row"><span class="agent-label">Trades executed</span><span class="agent-value" id="trades-done-m">—</span></div>
+          <div class="agent-row"><span class="agent-label">Last scan</span><span class="agent-value" id="last-scan-m">—</span></div>
+          <div class="agent-row"><span class="agent-label">Open positions</span><span class="agent-value" id="open-count-m">—</span></div>
+          <div class="agent-row"><span class="agent-label">Market status</span><span class="agent-value" id="market-status-m">—</span></div>
+        </div>
+        <div class="card">
+          <div class="card-title">About</div>
+          <div class="agent-row"><span class="agent-label">Mode</span><span class="agent-value amber">Paper Trading</span></div>
+          <div class="agent-row"><span class="agent-label">Stop loss</span><span class="agent-value">-8%</span></div>
+          <div class="agent-row"><span class="agent-label">Take profit</span><span class="agent-value">+20%</span></div>
+          <div class="agent-row"><span class="agent-label">Max positions</span><span class="agent-value">10</span></div>
+          <div class="agent-row"><span class="agent-label">Scan interval</span><span class="agent-value">2 hours</span></div>
         </div>
       </div>
     </div>
-
   </div>
 </div>
 
 <script>
 const BASE = 'https://alpaca-proxy-s3m9.onrender.com';
 
+function switchTab(tab, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('panel-' + tab).classList.add('active');
+}
 function fmt(n) {
-  const v = parseFloat(n || 0);
-  return '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return '$' + parseFloat(n||0).toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2});
 }
 function fmtPnl(n) {
-  const v = parseFloat(n || 0);
-  return (v >= 0 ? '+' : '') + fmt(Math.abs(v));
+  const v = parseFloat(n||0);
+  return (v>=0?'+':'') + fmt(Math.abs(v));
 }
 function timeAgo(iso) {
   if (!iso) return '—';
-  const d = Math.floor((Date.now() - new Date(iso)) / 1000);
-  if (d < 60) return d + 's ago';
-  if (d < 3600) return Math.floor(d / 60) + 'm ago';
-  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
-  return Math.floor(d / 86400) + 'd ago';
+  const d = Math.floor((Date.now()-new Date(iso))/1000);
+  if (d<60) return d+'s ago';
+  if (d<3600) return Math.floor(d/60)+'m ago';
+  if (d<86400) return Math.floor(d/3600)+'h ago';
+  return Math.floor(d/86400)+'d ago';
 }
-
 async function loadAccount() {
   try {
-    const res = await fetch(`${BASE}/alpaca/v2/account`);
-    const a = await res.json();
-    const todayPnl = parseFloat(a.equity || 0) - parseFloat(a.last_equity || 0);
-    const totalPnl = parseFloat(a.equity || 0) - 100000;
-
+    const a = await fetch(`${BASE}/alpaca/v2/account`).then(r=>r.json());
+    const todayPnl = parseFloat(a.equity||0) - parseFloat(a.last_equity||0);
+    const totalPnl = parseFloat(a.equity||0) - 100000;
     document.getElementById('portfolio').textContent = fmt(a.portfolio_value);
     document.getElementById('buying-power').textContent = fmt(a.buying_power);
-
     const tp = document.getElementById('today-pnl');
     tp.textContent = fmtPnl(todayPnl);
-    tp.className = 'stat-value ' + (todayPnl >= 0 ? 'green' : 'red');
-
-    const total = document.getElementById('total-pnl');
-    total.textContent = fmtPnl(totalPnl);
-    total.className = 'stat-value ' + (totalPnl >= 0 ? 'green' : 'red');
+    tp.className = 'stat-value '+(todayPnl>=0?'green':'red');
+    const tl = document.getElementById('total-pnl');
+    tl.textContent = fmtPnl(totalPnl);
+    tl.className = 'stat-value '+(totalPnl>=0?'green':'red');
   } catch(e) {}
 }
-
+function renderPositions(positions, listId) {
+  const el = document.getElementById(listId);
+  if (!Array.isArray(positions)||!positions.length) {
+    el.innerHTML = '<div class="empty-state">No open positions</div>'; return;
+  }
+  el.innerHTML = positions.map(p => {
+    const pct = parseFloat(p.unrealized_plpc)*100;
+    const col = pct>=0?'#34c759':'#ff3b30';
+    return `<div class="position-row">
+      <div>
+        <div class="position-ticker">${p.symbol}</div>
+        <div class="position-meta">${parseInt(p.qty)} shares · ${fmt(p.current_price)}</div>
+      </div>
+      <div>
+        <div class="position-pnl-pct" style="color:${col}">${pct>=0?'+':''}${pct.toFixed(2)}%</div>
+        <div class="position-pnl-val">${fmtPnl(p.unrealized_pl)}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
 async function loadPositions() {
   try {
-    const res = await fetch(`${BASE}/alpaca/v2/positions`);
-    const positions = await res.json();
-    const el = document.getElementById('positions-list');
-    document.getElementById('open-count').textContent = Array.isArray(positions) ? positions.length : 0;
-    if (!Array.isArray(positions) || positions.length === 0) {
-      el.innerHTML = '<div class="empty-state">No open positions</div>';
-      return;
-    }
-    el.innerHTML = positions.map(p => {
-      const pnlPct = parseFloat(p.unrealized_plpc) * 100;
-      const pnlVal = parseFloat(p.unrealized_pl);
-      const col = pnlPct >= 0 ? 'green' : 'red';
-      return `<div class="position-row">
-        <div>
-          <div class="position-ticker">${p.symbol}</div>
-          <div class="position-shares">${parseInt(p.qty)} shares · ${fmt(p.current_price)}</div>
-        </div>
-        <div class="position-pnl">
-          <div class="position-pnl-pct" style="color:${pnlPct >= 0 ? '#34c759' : '#ff3b30'}">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%</div>
-          <div class="position-pnl-val">${fmtPnl(pnlVal)}</div>
-        </div>
-      </div>`;
-    }).join('');
+    const positions = await fetch(`${BASE}/alpaca/v2/positions`).then(r=>r.json());
+    const count = Array.isArray(positions)?positions.length:0;
+    ['open-count-d','open-count-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=count;});
+    renderPositions(positions, 'positions-list-d');
+    renderPositions(positions, 'positions-list-m');
   } catch(e) {}
 }
-
 async function loadStatus() {
   try {
-    const res = await fetch(`${BASE}/status`);
-    const s = await res.json();
-    document.getElementById('scans-done').textContent = s.scansCompleted || 0;
-    document.getElementById('trades-done').textContent = s.tradesExecuted || 0;
-    document.getElementById('last-scan').textContent = timeAgo(s.lastScan);
-
-    const mEl = document.getElementById('market-status');
-    mEl.textContent = s.isMarketOpen ? 'Open' : 'Closed';
-    mEl.className = 'stat-value ' + (s.isMarketOpen ? 'green' : 'amber');
-    document.getElementById('market-sub').textContent = s.isMarketOpen ? 'Trading active' : 'After hours — intelligence mode';
-
+    const s = await fetch(`${BASE}/status`).then(r=>r.json());
+    ['scans-done-d','scans-done-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=s.scansCompleted||0;});
+    ['trades-done-d','trades-done-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=s.tradesExecuted||0;});
+    ['last-scan-d','last-scan-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=timeAgo(s.lastScan);});
+    const mText = s.isMarketOpen?'Open':'Closed';
+    document.getElementById('market-status').textContent = mText;
+    document.getElementById('market-status').className = 'stat-value '+(s.isMarketOpen?'green':'amber');
+    document.getElementById('market-sub').textContent = s.isMarketOpen?'Trading active':'After hours';
+    const mm = document.getElementById('market-status-m');
+    if(mm){mm.textContent=mText;mm.className='agent-value '+(s.isMarketOpen?'green':'amber');}
+    const status = s.status||'IDLE';
+    document.getElementById('agent-status-text').textContent = status.replace(/_/g,' ');
     const dot = document.getElementById('agent-dot');
-    const statusEl = document.getElementById('agent-status-text');
-    const status = s.status || 'IDLE';
-    statusEl.textContent = status.replace(/_/g, ' ');
-    if (status === 'IDLE' || status === 'MARKET_CLOSED') {
-      dot.className = 'dot dot-gray';
-    } else if (status.includes('ANALYSING') || status === 'SCANNING' || status === 'INTELLIGENCE') {
-      dot.className = 'dot dot-amber';
-    } else if (status === 'ERROR') {
-      dot.className = 'dot dot-red';
-    } else {
-      dot.className = 'dot dot-green';
-    }
+    if(status==='IDLE'||status==='MARKET_CLOSED') dot.className='dot dot-gray';
+    else if(status.includes('ANALYSING')||status==='SCANNING'||status==='INTELLIGENCE') dot.className='dot dot-amber';
+    else if(status==='ERROR') dot.className='dot dot-red';
+    else dot.className='dot dot-green';
   } catch(e) {}
 }
-
 async function loadLog() {
   try {
-    const res = await fetch(`${BASE}/log`);
-    const entries = await res.json();
+    const entries = await fetch(`${BASE}/log`).then(r=>r.json());
     const el = document.getElementById('log-list');
-    if (!entries || entries.length === 0) return;
-
+    if(!entries||!entries.length) return;
     el.innerHTML = entries.map(e => {
-      const tag = e.type || 'AGENT';
-      const ticker = e.ticker ? `<span class="log-ticker">${e.ticker}</span>` : '';
+      const tag = e.type||'AGENT';
+      const ticker = e.ticker?`<span class="log-ticker">${e.ticker}</span>`:'';
       const meta = [];
-      if (e.signalScore) meta.push(`Score ${e.signalScore}`);
-      if (e.confidence) meta.push(`Confidence ${e.confidence}%`);
-      if (e.dollars) meta.push(`Size $${parseFloat(e.dollars).toFixed(0)}`);
-      if (e.pnlPct !== undefined) meta.push(`P&L ${e.pnlPct >= 0 ? '+' : ''}${parseFloat(e.pnlPct).toFixed(2)}%`);
+      if(e.signalScore) meta.push('Score '+e.signalScore);
+      if(e.confidence) meta.push('Confidence '+e.confidence+'%');
+      if(e.dollars) meta.push('$'+parseFloat(e.dollars).toFixed(0));
+      if(e.pnlPct!==undefined) meta.push((e.pnlPct>=0?'+':'')+parseFloat(e.pnlPct).toFixed(2)+'%');
       return `<div class="log-entry">
-        <div class="log-entry-header">
-          <span class="log-tag tag-${tag}">${tag}</span>
-          ${ticker}
-        </div>
-        <div class="log-message">${e.message}</div>
-        ${e.thesis ? `<div class="log-thesis">"${e.thesis}"</div>` : ''}
-        ${meta.length ? `<div class="log-meta">${meta.join(' · ')}</div>` : ''}
+        <div class="log-entry-top"><span class="log-tag tag-${tag}">${tag}</span>${ticker}</div>
+        <div class="log-msg">${e.message}</div>
+        ${e.thesis?`<div class="log-thesis">"${e.thesis}"</div>`:''}
+        ${meta.length?`<div class="log-meta">${meta.join(' · ')}</div>`:''}
         <div class="log-time">${new Date(e.timestamp).toLocaleString()}</div>
       </div>`;
     }).join('');
   } catch(e) {}
 }
-
 async function triggerScan() {
-  const btn = document.querySelector('.btn-primary');
+  const btn = document.getElementById('scan-btn');
   btn.textContent = 'Scanning...';
   btn.disabled = true;
   try {
-    await fetch(`${BASE}/scan-now`, { method: 'POST' });
-    setTimeout(() => {
-      btn.textContent = 'Scan Now';
-      btn.disabled = false;
-      loadAll();
-    }, 3000);
-    setTimeout(loadAll, 8000);
+    await fetch(`${BASE}/scan-now`, {method:'POST'});
+    setTimeout(()=>{btn.textContent='Scan Now';btn.disabled=false;}, 5000);
+    setTimeout(loadAll, 6000);
     setTimeout(loadAll, 15000);
-  } catch(e) {
-    btn.textContent = 'Scan Now';
-    btn.disabled = false;
-  }
+    setTimeout(loadAll, 30000);
+  } catch(e) { btn.textContent='Scan Now'; btn.disabled=false; }
 }
-
 async function loadAll() {
   await Promise.all([loadAccount(), loadPositions(), loadStatus(), loadLog()]);
 }
-
 loadAll();
 setInterval(loadAll, 30000);
 </script>
