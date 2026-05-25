@@ -107,6 +107,28 @@ async function getCandidates() {
   return picks;
 }
 
+async function callIntelClaude(systemPrompt, userContent) {
+  const fullSystem = systemPrompt + '\n\nCRITICAL: Return ONLY a valid JSON object. No text before or after. Start with { end with }. Keep all string values short.';
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 600,
+      system: fullSystem,
+      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+      messages: [{ role: 'user', content: userContent }]
+    })
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(d.error.message);
+  const text = d.content.map(b => b.type === 'text' ? b.text : '').join('');
+  const clean = text.replace(/```json|```/g, '').trim();
+  const match = clean.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('No JSON in response');
+  return JSON.parse(match[0]);
+}
+
 async function callClaude(systemPrompt, userContent) {
   const fullSystem = systemPrompt + '\n\nIMPORTANT: Your response must be ONLY a valid JSON object. No text before or after it. No markdown. No backticks. Start your response with { and end with }.';
   const r = await fetch('https://api.anthropic.com/v1/messages', {
@@ -137,21 +159,13 @@ async function runIntelligenceScan() {
   state.lastIntel = new Date().toISOString();
   log('INTELLIGENCE', '🌐 Running overnight intelligence scan — collecting news and market events');
 
-  const INTEL_PROMPT = `You are a 24/7 market intelligence agent. Search for the latest financial news, market-moving events, geopolitical developments, earnings announcements, analyst upgrades/downgrades, central bank statements, and emerging trends that could impact stock markets. Focus on after-hours and overnight developments.
-Return ONLY valid JSON no markdown:
-{
-  "topStories": [
-    {"headline": "story", "impact": "BULLISH or BEARISH or NEUTRAL", "sectors": ["Tech"], "tickers": ["NVDA"], "urgency": "HIGH or MEDIUM or LOW"}
-  ],
-  "marketSentiment": "RISK_ON or RISK_OFF or MIXED",
-  "keyThemes": ["theme1", "theme2"],
-  "watchlist": ["TICKER1", "TICKER2"],
-  "preMarketOutlook": "Brief 2 sentence outlook for next trading session."
-}
-Return ONLY JSON.`;
+  const INTEL_PROMPT = `You are a 24/7 market intelligence agent. Search for the latest financial news and market-moving events. Keep all strings short.
+Return ONLY a JSON object like this exact structure:
+{"topStories":[{"headline":"short headline under 100 chars","impact":"BULLISH","sectors":["Tech"],"tickers":["NVDA"],"urgency":"HIGH"},{"headline":"short headline","impact":"BEARISH","sectors":["Finance"],"tickers":["JPM"],"urgency":"MEDIUM"}],"marketSentiment":"RISK_ON","keyThemes":["AI spending","Fed rates"],"watchlist":["NVDA","AAPL"],"preMarketOutlook":"One sentence outlook."}
+Maximum 3 stories. All headlines under 100 characters. Return ONLY JSON.`;
 
   try {
-    const intel = await callClaude(INTEL_PROMPT, 'Search for the latest financial news and market intelligence from the last few hours. What are the biggest stories that could move markets?');
+    const intel = await callIntelClaude(INTEL_PROMPT, 'Find the top 3 market-moving news stories from the last few hours. Be brief.');
     
     log('INTELLIGENCE', '📰 Market sentiment: ' + intel.marketSentiment + ' | Key themes: ' + (intel.keyThemes || []).join(', '), {
       marketSentiment: intel.marketSentiment,
@@ -371,5 +385,3 @@ app.listen(3001, () => {
   // Run trading scan 60 seconds after startup
   setTimeout(() => runScan(false), 60000);
 });
-app.get('/health', (req, res) => res.json({ ok: true, uptime: process.uptime() }));
-app.use(express.static(__dirname));
