@@ -18,7 +18,7 @@ const ALPACA_BASE   = 'https://paper-api.alpaca.markets';
 const ALPACA_DATA   = 'https://data.alpaca.markets';
 const SCAN_MINUTES  = parseInt(process.env.SCAN_INTERVAL_MINUTES || '120');
 const INTEL_MINUTES = parseInt(process.env.INTEL_INTERVAL_MINUTES || '30');
-const STOCKS_PER_SCAN = 5;
+const STOCKS_PER_SCAN = 3;
 
 let state = {
   status: 'IDLE',
@@ -71,13 +71,14 @@ async function getCandidates() {
 }
 
 async function callClaude(systemPrompt, userContent) {
+  const fullSystem = systemPrompt + '\n\nIMPORTANT: Your response must be ONLY a valid JSON object. No text before or after it. No markdown. No backticks. Start your response with { and end with }.';
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 800,
-      system: systemPrompt,
+      system: fullSystem,
       tools: [{ type: 'web_search_20250305', name: 'web_search' }],
       messages: [{ role: 'user', content: userContent }]
     })
@@ -85,7 +86,10 @@ async function callClaude(systemPrompt, userContent) {
   const d = await r.json();
   if (d.error) throw new Error(d.error.message);
   const text = d.content.map(b => b.type === 'text' ? b.text : '').join('');
-  return JSON.parse(text.replace(/```json|```/g, '').trim());
+  const clean = text.replace(/```json|```/g, '').trim();
+  const match = clean.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('No JSON in response: ' + clean.substring(0, 100));
+  return JSON.parse(match[0]);
 }
 
 // ── 24/7 INTELLIGENCE SCAN ─────────────────────────────────────────
@@ -267,7 +271,7 @@ async function runScan(allowForce) {
           log('DECISION', '⏭ HOLD ' + ticker + ' (score:' + analysis.signalScore + ')', { ticker, signalScore: analysis.signalScore });
         }
 
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 15000));
       } catch(e) { log('ERROR', 'Analysis failed ' + ticker + ': ' + e.message); }
     }
 
