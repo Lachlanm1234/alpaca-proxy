@@ -56,17 +56,54 @@ async function checkMarket() {
 }
 
 async function getCandidates() {
-  const fallback = ['AAPL','NVDA','MSFT','AMZN','META','GOOGL','TSLA','AMD','BABA','TSM','ASML','PLTR','COIN','SOFI','ARM'];
+  const fallback = [
+    'AAPL','NVDA','MSFT','AMZN','META','GOOGL','TSLA','AMD','BABA','TSM',
+    'ASML','PLTR','COIN','SOFI','ARM','SMCI','MSTR','IONQ','RGTI','HOOD',
+    'RKLB','PATH','AI','SNOW','DDOG','NET','CRWD','UBER','LYFT','SHOP',
+    'NFLX','DIS','PYPL','SQ','ROKU','ZOOM','SPOT','ABNB','DASH','RIVN'
+  ];
+
+  // Try most-actives screener first
   try {
     const r = await fetch(ALPACA_DATA + '/v1beta1/screener/stocks/most-actives?by=volume&top=20', {
       headers: { 'APCA-API-KEY-ID': ALPACA_KEY, 'APCA-API-SECRET-KEY': ALPACA_SECRET }
     });
     const d = await r.json();
-    const syms = (d.most_actives || []).filter(s => s.symbol && !s.symbol.includes('/')).slice(0, STOCKS_PER_SCAN).map(s => s.symbol);
-    if (syms.length > 0) { log('SCANNER', 'Candidates: ' + syms.join(', ')); return syms; }
-  } catch(e) {}
-  const picks = fallback.sort(() => Math.random() - 0.5).slice(0, STOCKS_PER_SCAN);
-  log('SCANNER', 'Fallback candidates: ' + picks.join(', '));
+    const syms = (d.most_actives || [])
+      .filter(s => s.symbol && !s.symbol.includes('/') && !s.symbol.includes('.'))
+      .slice(0, STOCKS_PER_SCAN)
+      .map(s => s.symbol);
+    if (syms.length > 0) {
+      log('SCANNER', 'Live candidates (most active): ' + syms.join(', '));
+      return syms;
+    }
+  } catch(e) {
+    log('SCANNER', 'Screener error: ' + e.message);
+  }
+
+  // Try top gainers
+  try {
+    const r = await fetch(ALPACA_DATA + '/v1beta1/screener/stocks/top-market-movers?top=10', {
+      headers: { 'APCA-API-KEY-ID': ALPACA_KEY, 'APCA-API-SECRET-KEY': ALPACA_SECRET }
+    });
+    const d = await r.json();
+    const gainers = (d.gainers || [])
+      .filter(s => s.symbol && !s.symbol.includes('/'))
+      .slice(0, STOCKS_PER_SCAN)
+      .map(s => s.symbol);
+    if (gainers.length > 0) {
+      log('SCANNER', 'Live candidates (top movers): ' + gainers.join(', '));
+      return gainers;
+    }
+  } catch(e) {
+    log('SCANNER', 'Movers error: ' + e.message);
+  }
+
+  // Rotating fallback — different stocks each scan based on time
+  const hour = new Date().getHours();
+  const rotated = [...fallback.slice(hour % fallback.length), ...fallback.slice(0, hour % fallback.length)];
+  const picks = rotated.slice(0, STOCKS_PER_SCAN);
+  log('SCANNER', 'Rotating fallback candidates: ' + picks.join(', '));
   return picks;
 }
 
