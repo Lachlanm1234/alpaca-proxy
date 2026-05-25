@@ -371,3 +371,5 @@ app.listen(3001, () => {
   // Run trading scan 60 seconds after startup
   setTimeout(() => runScan(false), 60000);
 });
+app.get('/health', (req, res) => res.json({ ok: true, uptime: process.uptime() }));
+app.use(express.static(__dirname));
