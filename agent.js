@@ -1,11 +1,9 @@
 const express = require('express');
 const fetch = require('node-fetch');
-let cron;
-try { cron = require('node-cron'); } catch(e) { console.log('node-cron not found, using setInterval fallback'); }
-const fs = require('fs');
-
 const app = express();
 app.use(express.json());
+
+// CORS
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', '*');
@@ -14,410 +12,205 @@ app.use((req, res, next) => {
   next();
 });
 
-// ── CONFIG ────────────────────────────────────────────────────────
+// CONFIG
 const ALPACA_KEY    = process.env.ALPACA_KEY;
 const ALPACA_SECRET = process.env.ALPACA_SECRET;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const ALPACA_BASE   = 'https://paper-api.alpaca.markets';
 const ALPACA_DATA   = 'https://data.alpaca.markets';
-const SCAN_INTERVAL = process.env.SCAN_INTERVAL_MINUTES || 120; // minutes between scans
-const STOCKS_PER_SCAN = 5; // how many stocks to analyse each scan
-const LOG_FILE = '/tmp/agent-log.json';
+const SCAN_MINUTES  = parseInt(process.env.SCAN_INTERVAL_MINUTES || '120');
+const STOCKS_PER_SCAN = 5;
 
-// ── STATE ─────────────────────────────────────────────────────────
-let agentState = {
-  status: 'IDLE',
-  lastScan: null,
-  nextScan: null,
-  scansCompleted: 0,
-  tradesExecuted: 0,
-  isMarketOpen: false,
-};
+// STATE
+let state = { status: 'IDLE', lastScan: null, scansCompleted: 0, tradesExecuted: 0, isMarketOpen: false };
 let decisionLog = [];
-let loadedLog = [];
-try { loadedLog = JSON.parse(fs.readFileSync(LOG_FILE, 'utf8')); } catch(e) {}
-decisionLog = loadedLog;
 
-function saveLog() {
-  try { fs.writeFileSync(LOG_FILE, JSON.stringify(decisionLog.slice(-200), null, 2)); } catch(e) {}
-}
-
-function log(type, message, data = {}) {
-  const entry = { timestamp: new Date().toISOString(), type, message, ...data };
+function log(type, message, data) {
+  const entry = { timestamp: new Date().toISOString(), type, message, ...(data || {}) };
   decisionLog.unshift(entry);
-  if (decisionLog.length > 200) decisionLog = decisionLog.slice(0, 200);
-  saveLog();
-  console.log(`[${type}] ${message}`, data);
+  if (decisionLog.length > 200) decisionLog.length = 200;
+  console.log('[' + type + '] ' + message);
 }
 
-// ── ALPACA HELPERS ────────────────────────────────────────────────
-async function alpaca(path, options = {}) {
-  const res = await fetch(`${ALPACA_BASE}${path}`, {
-    ...options,
-    headers: {
-      'APCA-API-KEY-ID': ALPACA_KEY,
-      'APCA-API-SECRET-KEY': ALPACA_SECRET,
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
+// ALPACA
+async function alpaca(path, opts) {
+  opts = opts || {};
+  const r = await fetch(ALPACA_BASE + path, {
+    method: opts.method || 'GET',
+    headers: { 'APCA-API-KEY-ID': ALPACA_KEY, 'APCA-API-SECRET-KEY': ALPACA_SECRET, 'Content-Type': 'application/json' },
+    body: opts.body || undefined,
   });
-  return res.json();
+  return r.json();
 }
 
-async function alpacaData(path) {
-  const res = await fetch(`${ALPACA_DATA}${path}`, {
-    headers: {
-      'APCA-API-KEY-ID': ALPACA_KEY,
-      'APCA-API-SECRET-KEY': ALPACA_SECRET,
-    },
-  });
-  return res.json();
-}
-
-// ── MARKET STATUS ─────────────────────────────────────────────────
-async function checkMarketOpen() {
+// MARKET CHECK
+async function isMarketOpen() {
   try {
-    const clock = await alpaca('/v2/clock');
-    agentState.isMarketOpen = clock.is_open;
-    return clock.is_open;
-  } catch(e) {
-    log('ERROR', 'Failed to check market status', { error: e.message });
-    return false;
-  }
+    const c = await alpaca('/v2/clock');
+    state.isMarketOpen = c.is_open;
+    return c.is_open;
+  } catch(e) { return false; }
 }
 
-// ── STOCK DISCOVERY ───────────────────────────────────────────────
-async function getTopCandidates() {
+// GET CANDIDATES
+async function getCandidates() {
+  const fallback = ['AAPL','NVDA','MSFT','AMZN','META','GOOGL','TSLA','AMD','BABA','TSM','ASML','PLTR','COIN','SOFI','ARM'];
   try {
-    // Get most active stocks by volume from Alpaca screener
-    const res = await fetch(
-      `${ALPACA_DATA}/v1beta1/screener/stocks/most-actives?by=volume&top=50`,
-      { headers: { 'APCA-API-KEY-ID': ALPACA_KEY, 'APCA-API-SECRET-KEY': ALPACA_SECRET } }
-    );
-    const data = await res.json();
-    const symbols = (data.most_actives || [])
-      .filter(s => s.symbol && !s.symbol.includes('/'))
-      .slice(0, STOCKS_PER_SCAN)
-      .map(s => s.symbol);
-
-    if (symbols.length > 0) {
-      log('SCANNER', `Found ${symbols.length} active stocks to analyse`, { symbols });
-      return symbols;
-    }
-  } catch(e) {
-    log('SCANNER', 'Screener unavailable, using fallback list');
-  }
-
-  // Fallback: diversified watchlist of liquid US + ADR stocks
-  const fallback = [
-    'AAPL','NVDA','MSFT','AMZN','META','GOOGL','TSLA','AMD','BABA','TSM',
-    'ASML','NVO','SMCI','ARM','PLTR','COIN','MSTR','SOFI','RIVN','LCID',
-    'SPY','QQQ','ARKK','XLK','XLF','GLD','SLV','USO',
-  ];
-  // Shuffle and pick STOCKS_PER_SCAN
-  const shuffled = fallback.sort(() => Math.random() - 0.5);
-  const picks = shuffled.slice(0, STOCKS_PER_SCAN);
-  log('SCANNER', `Using fallback watchlist`, { symbols: picks });
+    const r = await fetch(ALPACA_DATA + '/v1beta1/screener/stocks/most-actives?by=volume&top=20', {
+      headers: { 'APCA-API-KEY-ID': ALPACA_KEY, 'APCA-API-SECRET-KEY': ALPACA_SECRET }
+    });
+    const d = await r.json();
+    const syms = (d.most_actives || []).filter(s => s.symbol && !s.symbol.includes('/')).slice(0, STOCKS_PER_SCAN).map(s => s.symbol);
+    if (syms.length > 0) { log('SCANNER', 'Candidates: ' + syms.join(', ')); return syms; }
+  } catch(e) {}
+  const picks = fallback.sort(() => Math.random() - 0.5).slice(0, STOCKS_PER_SCAN);
+  log('SCANNER', 'Fallback candidates: ' + picks.join(', '));
   return picks;
 }
 
-// ── AI ANALYSIS ───────────────────────────────────────────────────
-async function callClaude(systemPrompt, userContent) {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+// AI ANALYSIS
+async function analyseStock(ticker) {
+  const prompt = `You are an autonomous AI trading agent. Analyse ${ticker} using web search for current price, momentum, news, sentiment, and technicals. Return ONLY valid JSON no markdown:
+{"ticker":"${ticker}","companyName":"Full Name","currentPrice":150.00,"signal":"BUY","signalScore":82,"confidence":76,"thesis":"Short 1-2 sentence reason.","targetPrice":175.00,"stopLoss":138.00,"expectedReturn":"+16.7%","risks":["risk1"],"catalysts":["catalyst1"]}
+signal must be BUY, HOLD, or SELL. scores 0-100. Return ONLY JSON.`;
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_KEY,
-      'anthropic-version': '2023-06-01',
-    },
+    headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 800,
-      system: systemPrompt,
+      model: 'claude-sonnet-4-20250514', max_tokens: 600, system: prompt,
       tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-      messages: [{ role: 'user', content: userContent }],
-    }),
+      messages: [{ role: 'user', content: 'Analyse: ' + ticker }]
+    })
   });
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message);
-  const text = data.content.map(b => b.type === 'text' ? b.text : '').join('');
+  const d = await r.json();
+  if (d.error) throw new Error(d.error.message);
+  const text = d.content.map(b => b.type === 'text' ? b.text : '').join('');
   return JSON.parse(text.replace(/```json|```/g, '').trim());
 }
 
-async function analyseStock(ticker) {
-  log('ANALYSIS', `Starting analysis for ${ticker}`);
-
-  const SIGNAL_PROMPT = `You are an elite autonomous AI trading agent. Analyse the stock ${ticker} using real-time web search. 
-Evaluate: current price, momentum, technicals (RSI, MACD, moving averages), recent news, social sentiment, insider activity, institutional flows, upcoming catalysts, and risks.
-Return ONLY valid JSON, no markdown:
-{
-  "ticker": "${ticker}",
-  "companyName": "Full name",
-  "currentPrice": 150.00,
-  "priceChange": "+2.3%",
-  "direction": "up",
-  "signal": "BUY",
-  "signalScore": 82,
-  "confidence": 76,
-  "technicalScore": 80,
-  "sentimentScore": 75,
-  "newsScore": 85,
-  "rsi": 58,
-  "technicalSignal": "BULLISH",
-  "thesis": "2 sentence reason for the trade.",
-  "targetPrice": 175.00,
-  "stopLoss": 138.00,
-  "expectedReturn": "+16.7%",
-  "timeHorizon": "30-60 DAYS",
-  "risks": ["Risk 1", "Risk 2"],
-  "catalysts": ["Catalyst 1"],
-  "sector": "Technology"
-}
-signal must be: BUY, HOLD, or SELL. All scores 0-100. Return ONLY JSON.`;
-
-  const result = await callClaude(SIGNAL_PROMPT, `Full autonomous trading analysis for: ${ticker}`);
-  log('ANALYSIS', `${ticker} signal: ${result.signal} (score: ${result.signalScore}, confidence: ${result.confidence}%)`, {
-    ticker, signal: result.signal, signalScore: result.signalScore, confidence: result.confidence, thesis: result.thesis
-  });
-  return result;
-}
-
-// ── POSITION SIZING ───────────────────────────────────────────────
-function getPositionDollars(portfolioValue, signalScore, confidence) {
-  const combined = (signalScore * 0.6) + (confidence * 0.4);
-  if (combined >= 85) return portfolioValue * 0.10;
-  if (combined >= 78) return portfolioValue * 0.07;
-  if (combined >= 72) return portfolioValue * 0.05;
-  if (combined >= 65) return portfolioValue * 0.03;
+// POSITION SIZING
+function positionDollars(portfolio, score, confidence) {
+  const c = score * 0.6 + confidence * 0.4;
+  if (c >= 85) return portfolio * 0.10;
+  if (c >= 78) return portfolio * 0.07;
+  if (c >= 72) return portfolio * 0.05;
+  if (c >= 65) return portfolio * 0.03;
   return 0;
 }
 
-// ── TRADE EXECUTION ───────────────────────────────────────────────
-async function placeOrder(ticker, notionalDollars, side, analysis) {
+// PLACE ORDER
+async function placeOrder(ticker, dollars, side, analysis) {
   try {
-    // Check if we already hold this
     if (side === 'buy') {
       const positions = await alpaca('/v2/positions');
-      const existing = Array.isArray(positions) && positions.find(p => p.symbol === ticker);
-      if (existing) {
-        log('TRADE', `Skipping ${ticker} — already holding position`, { ticker });
-        return null;
+      if (Array.isArray(positions) && positions.find(p => p.symbol === ticker)) {
+        log('TRADE', 'Already holding ' + ticker + ' — skip'); return null;
       }
     }
-
     const order = await alpaca('/v2/orders', {
       method: 'POST',
-      body: JSON.stringify({
-        symbol: ticker,
-        notional: notionalDollars.toFixed(2),
-        side,
-        type: 'market',
-        time_in_force: 'day',
-      }),
+      body: JSON.stringify({ symbol: ticker, notional: dollars.toFixed(2), side, type: 'market', time_in_force: 'day' })
     });
-
     if (order.id) {
-      agentState.tradesExecuted++;
-      log('TRADE', `✅ ${side.toUpperCase()} order placed for ${ticker} — $${notionalDollars.toFixed(0)}`, {
-        ticker, side, dollars: notionalDollars, orderId: order.id,
-        signalScore: analysis?.signalScore, confidence: analysis?.confidence,
-        thesis: analysis?.thesis, stopLoss: analysis?.stopLoss, target: analysis?.targetPrice,
-      });
-      return order;
-    } else {
-      log('ERROR', `Order rejected for ${ticker}`, { ticker, response: order });
-      return null;
+      state.tradesExecuted++;
+      log('TRADE', (side === 'buy' ? '✅ BUY' : '🔴 SELL') + ' ' + ticker + ' $' + dollars.toFixed(0), { ticker, side, dollars, orderId: order.id, thesis: analysis && analysis.thesis });
     }
-  } catch(e) {
-    log('ERROR', `Order failed for ${ticker}: ${e.message}`, { ticker, error: e.message });
-    return null;
-  }
+    return order;
+  } catch(e) { log('ERROR', 'Order failed ' + ticker + ': ' + e.message); return null; }
 }
 
-// ── POSITION MANAGEMENT ───────────────────────────────────────────
-async function manageExistingPositions() {
+// MANAGE POSITIONS
+async function managePositions() {
   try {
     const positions = await alpaca('/v2/positions');
-    if (!Array.isArray(positions) || positions.length === 0) return;
-
-    log('PORTFOLIO', `Managing ${positions.length} open positions`);
-
-    for (const pos of positions) {
-      const pnlPct = parseFloat(pos.unrealized_plpc) * 100;
-      const ticker = pos.symbol;
-
-      // Stop loss: exit at -8%
-      if (pnlPct <= -8) {
-        log('RISK', `🛑 Stop loss triggered for ${ticker} at ${pnlPct.toFixed(1)}%`, { ticker, pnlPct });
-        await alpaca('/v2/positions/' + ticker, { method: 'DELETE' });
-        log('TRADE', `🔴 SOLD ${ticker} — stop loss hit (${pnlPct.toFixed(1)}%)`, { ticker, pnlPct, reason: 'STOP_LOSS' });
-        continue;
+    if (!Array.isArray(positions) || !positions.length) return;
+    for (const p of positions) {
+      const pnl = parseFloat(p.unrealized_plpc) * 100;
+      if (pnl <= -8) {
+        log('RISK', '🛑 Stop loss ' + p.symbol + ' at ' + pnl.toFixed(1) + '%', { ticker: p.symbol, pnlPct: pnl, reason: 'STOP_LOSS' });
+        await alpaca('/v2/positions/' + p.symbol, { method: 'DELETE' });
+      } else if (pnl >= 20) {
+        log('PROFIT', '🎯 Take profit ' + p.symbol + ' at +' + pnl.toFixed(1) + '%', { ticker: p.symbol, pnlPct: pnl, reason: 'TAKE_PROFIT' });
+        await alpaca('/v2/positions/' + p.symbol, { method: 'DELETE' });
+      } else {
+        log('PORTFOLIO', 'Holding ' + p.symbol + ': ' + (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '%', { ticker: p.symbol, pnlPct: pnl });
       }
-
-      // Take profit: exit at +20%
-      if (pnlPct >= 20) {
-        log('PROFIT', `🎯 Take profit triggered for ${ticker} at +${pnlPct.toFixed(1)}%`, { ticker, pnlPct });
-        await alpaca('/v2/positions/' + ticker, { method: 'DELETE' });
-        log('TRADE', `🟢 SOLD ${ticker} — take profit hit (+${pnlPct.toFixed(1)}%)`, { ticker, pnlPct, reason: 'TAKE_PROFIT' });
-        continue;
-      }
-
-      log('PORTFOLIO', `Holding ${ticker}: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`, { ticker, pnlPct, value: pos.market_value });
     }
-  } catch(e) {
-    log('ERROR', `Position management failed: ${e.message}`, { error: e.message });
-  }
+  } catch(e) { log('ERROR', 'Position management failed: ' + e.message); }
 }
 
-// ── MAIN SCAN ─────────────────────────────────────────────────────
+// MAIN SCAN
 async function runScan() {
-  const isOpen = await checkMarketOpen();
-  if (!isOpen) {
-    log('SCANNER', 'Market closed — skipping scan');
-    agentState.status = 'MARKET_CLOSED';
-    return;
-  }
-
-  agentState.status = 'SCANNING';
-  agentState.lastScan = new Date().toISOString();
-  log('SCANNER', '🔍 Starting autonomous scan cycle');
-
+  const open = await isMarketOpen();
+  if (!open) { log('SCANNER', 'Market closed — skipping scan'); state.status = 'MARKET_CLOSED'; return; }
+  state.status = 'SCANNING';
+  state.lastScan = new Date().toISOString();
+  log('SCANNER', '🔍 Starting scan cycle');
   try {
-    // 1. Manage existing positions first
-    await manageExistingPositions();
-
-    // 2. Get account info
+    await managePositions();
     const account = await alpaca('/v2/account');
-    const portfolioValue = parseFloat(account.portfolio_value || 100000);
-    const buyingPower = parseFloat(account.buying_power || 0);
-
-    log('PORTFOLIO', `Portfolio: $${portfolioValue.toLocaleString()} | Buying power: $${buyingPower.toLocaleString()}`);
-
-    // 3. Get max open positions (don't over-concentrate)
+    const portfolio = parseFloat(account.portfolio_value || 100000);
+    let buyingPower = parseFloat(account.buying_power || 0);
     const positions = await alpaca('/v2/positions');
     const openCount = Array.isArray(positions) ? positions.length : 0;
-    const MAX_POSITIONS = 10;
-
-    if (openCount >= MAX_POSITIONS) {
-      log('SCANNER', `Max positions (${MAX_POSITIONS}) reached — skipping new entries`);
-      agentState.status = 'IDLE';
-      return;
-    }
-
-    // 4. Discover candidates
-    const candidates = await getTopCandidates();
-
-    // 5. Analyse each candidate
+    if (openCount >= 10) { log('SCANNER', 'Max positions reached'); state.status = 'IDLE'; return; }
+    const candidates = await getCandidates();
     for (const ticker of candidates) {
       try {
-        agentState.status = `ANALYSING ${ticker}`;
+        state.status = 'ANALYSING ' + ticker;
         const analysis = await analyseStock(ticker);
-
         if (analysis.signal === 'BUY') {
-          const dollars = getPositionDollars(portfolioValue, analysis.signalScore, analysis.confidence);
-
-          if (dollars === 0) {
-            log('DECISION', `⏭ SKIP ${ticker} — confidence too low (score: ${analysis.signalScore}, confidence: ${analysis.confidence}%)`);
-            continue;
-          }
-
-          if (dollars > buyingPower) {
-            log('DECISION', `⏭ SKIP ${ticker} — insufficient buying power ($${buyingPower.toFixed(0)} available, need $${dollars.toFixed(0)})`);
-            continue;
-          }
-
-          log('DECISION', `✅ EXECUTE BUY ${ticker} — $${dollars.toFixed(0)} (score: ${analysis.signalScore}, confidence: ${analysis.confidence}%)`, {
-            ticker, dollars, signalScore: analysis.signalScore, confidence: analysis.confidence,
-          });
+          const dollars = positionDollars(portfolio, analysis.signalScore, analysis.confidence);
+          if (dollars === 0) { log('DECISION', '⏭ SKIP ' + ticker + ' — score too low (' + analysis.signalScore + ')'); continue; }
+          if (dollars > buyingPower) { log('DECISION', '⏭ SKIP ' + ticker + ' — insufficient buying power'); continue; }
+          log('DECISION', '✅ BUY ' + ticker + ' $' + dollars.toFixed(0) + ' (score:' + analysis.signalScore + ' conf:' + analysis.confidence + '%)', { ticker, dollars, signalScore: analysis.signalScore, confidence: analysis.confidence, thesis: analysis.thesis });
           await placeOrder(ticker, dollars, 'buy', analysis);
-
-          // Update buying power estimate
           buyingPower -= dollars;
-
         } else if (analysis.signal === 'SELL') {
-          // Check if we hold it
           const pos = Array.isArray(positions) && positions.find(p => p.symbol === ticker);
-          if (pos) {
-            log('DECISION', `🔴 SELL signal for ${ticker} — liquidating position`);
-            await alpaca('/v2/positions/' + ticker, { method: 'DELETE' });
-          } else {
-            log('DECISION', `⏭ SELL signal for ${ticker} but no position held — skip`);
-          }
+          if (pos) { await alpaca('/v2/positions/' + ticker, { method: 'DELETE' }); log('DECISION', '🔴 SELL ' + ticker, { ticker }); }
+          else { log('DECISION', '⏭ SELL signal ' + ticker + ' but no position'); }
         } else {
-          log('DECISION', `⏭ HOLD ${ticker} — no action (score: ${analysis.signalScore})`);
+          log('DECISION', '⏭ HOLD ' + ticker + ' (score:' + analysis.signalScore + ')');
         }
-
-        // Small delay between analyses to avoid rate limits
         await new Promise(r => setTimeout(r, 2000));
-      } catch(e) {
-        log('ERROR', `Analysis failed for ${ticker}: ${e.message}`, { ticker, error: e.message });
-      }
+      } catch(e) { log('ERROR', 'Analysis failed ' + ticker + ': ' + e.message); }
     }
-
-    agentState.scansCompleted++;
-    agentState.status = 'IDLE';
-    log('SCANNER', `✅ Scan cycle complete. Total scans: ${agentState.scansCompleted}, Total trades: ${agentState.tradesExecuted}`);
-  } catch(e) {
-    log('ERROR', `Scan cycle failed: ${e.message}`, { error: e.message });
-    agentState.status = 'ERROR';
-  }
+    state.scansCompleted++;
+    state.status = 'IDLE';
+    log('SCANNER', '✅ Scan complete. Scans: ' + state.scansCompleted + ' Trades: ' + state.tradesExecuted);
+  } catch(e) { log('ERROR', 'Scan failed: ' + e.message); state.status = 'ERROR'; }
 }
 
-// ── SCHEDULER ─────────────────────────────────────────────────────
-// Run every N minutes during market hours (Mon-Fri, 9:30am-4pm ET)
-if (cron) {
-  const cronExpression = `*/${SCAN_INTERVAL} 9-15 * * 1-5`;
-  cron.schedule(cronExpression, runScan, { timezone: 'America/New_York' });
-} else {
-  setInterval(runScan, SCAN_INTERVAL * 60 * 1000);
+// SCHEDULER — no external deps, pure setInterval
+function scheduleScans() {
+  const ms = SCAN_MINUTES * 60 * 1000;
+  setInterval(runScan, ms);
+  log('AGENT', 'Scheduler started — every ' + SCAN_MINUTES + ' minutes');
 }
-log('AGENT', `🤖 Autonomous trading agent started. Scanning every ${SCAN_INTERVAL} minutes during market hours.`);
 
-// Run once immediately on startup if market is open
-setTimeout(runScan, 5000);
-
-// ── API ROUTES ────────────────────────────────────────────────────
+// ROUTES
 app.use('/alpaca', async (req, res) => {
-  const mode = req.headers['x-alpaca-mode'];
-  const base = mode === 'live' ? 'https://api.alpaca.markets' : ALPACA_BASE;
-  const url = base + req.url;
+  const base = req.headers['x-alpaca-mode'] === 'live' ? 'https://api.alpaca.markets' : ALPACA_BASE;
   try {
-    const response = await fetch(url, {
+    const r = await fetch(base + req.url, {
       method: req.method,
-      headers: {
-        'APCA-API-KEY-ID': ALPACA_KEY,
-        'APCA-API-SECRET-KEY': ALPACA_SECRET,
-        'Content-Type': 'application/json',
-      },
+      headers: { 'APCA-API-KEY-ID': ALPACA_KEY, 'APCA-API-SECRET-KEY': ALPACA_SECRET, 'Content-Type': 'application/json' },
       body: ['GET','HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body),
     });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch(err) {
-    res.status(500).json({ error: err.message });
-  }
+    const d = await r.json();
+    res.status(r.status).json(d);
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/status', (req, res) => {
-  res.json({ ...agentState, scanIntervalMinutes: SCAN_INTERVAL, stocksPerScan: STOCKS_PER_SCAN });
-});
-
-app.get('/log', (req, res) => {
-  res.json(decisionLog.slice(0, 100));
-});
-
-app.post('/scan-now', async (req, res) => {
-  res.json({ message: 'Scan triggered' });
-  runScan();
-});
-
+app.get('/status', (req, res) => res.json({ ...state, scanIntervalMinutes: SCAN_MINUTES }));
+app.get('/log', (req, res) => res.json(decisionLog.slice(0, 100)));
+app.post('/scan-now', (req, res) => { res.json({ message: 'Scan triggered' }); runScan(); });
 app.get('/health', (req, res) => res.json({ ok: true, uptime: process.uptime() }));
 
-// Keep-alive: ping self every 5 minutes to prevent Railway sleep
-setInterval(async () => {
-  try {
-    await fetch('https://alpaca-proxy-production-32ad.up.railway.app/health');
-  } catch(e) {}
-}, 5 * 60 * 1000);
-
-app.listen(3001, () => console.log('🤖 Market Intelligence Agent running on port 3001'));
+// START
+app.listen(3001, () => {
+  log('AGENT', '🤖 Market Intelligence Agent running on port 3001');
+  scheduleScans();
+  setTimeout(runScan, 5000);
+});
