@@ -395,6 +395,7 @@ app.post('/intel-now', (req, res) => {
 });
 
 app.get('/health', (req, res) => res.json({ ok: true, uptime: process.uptime() }));
+app.use(express.static(__dirname));
 
 app.listen(3001, () => {
   log('AGENT', '🤖 Market Intelligence Agent running on port 3001');
