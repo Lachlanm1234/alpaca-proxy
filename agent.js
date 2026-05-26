@@ -287,25 +287,45 @@ async function runScan(allowForce) {
       return;
     }
 
-    const candidates = await getCandidates();
+    // Run unified discovery + analysis
+    state.status = 'DISCOVERING';
+    log('SCANNER', '🔍 Searching WSB, StockTwits, options flow, earnings, analyst upgrades, breaking news...');
+    
+    let opportunities = [];
+    try {
+      opportunities = await discoverAndAnalyse();
+      log('SCANNER', '📊 Discovered ' + opportunities.length + ' opportunities from live sources');
+    } catch(e) {
+      log('ERROR', 'Discovery failed: ' + e.message + ' — falling back to single stock analysis');
+      const fallbacks = ['NVDA','AAPL','TSLA','AMD','META'].slice(0, STOCKS_PER_SCAN);
+      for (const t of fallbacks) {
+        try { const a = await analyseStock(t); opportunities.push(a); await new Promise(r => setTimeout(r, 15000)); } catch(e2) {}
+      }
+    }
 
-    for (const ticker of candidates) {
+    for (const analysis of opportunities) {
+      const ticker = analysis.ticker;
+      if (!ticker) continue;
       try {
-        state.status = 'ANALYSING ' + ticker;
-        const analysis = await analyseStock(ticker);
-
+        const sourceInfo = analysis.discoveredFrom ? ' [via ' + analysis.discoveredFrom + ']' : '';
+        const catalyst = analysis.catalyst ? ' | ' + analysis.catalyst : '';
+        log('ANALYSIS', '🔎 ' + ticker + ' — ' + (analysis.companyName || '') + sourceInfo + catalyst, {
+          ticker, signalScore: analysis.signalScore, confidence: analysis.confidence,
+          socialBuzz: analysis.socialBuzz, newsHeadline: analysis.newsHeadline,
+          newsSource: analysis.newsSource, thesis: analysis.thesis,
+        });
         if (analysis.signal === 'BUY') {
           if (!isOpen) {
-            // Market closed — log the signal but don't trade
-            log('DECISION', '📋 BUY signal noted for ' + ticker + ' — will execute when market opens (score:' + analysis.signalScore + ' conf:' + analysis.confidence + '%)', {
-              ticker, signalScore: analysis.signalScore, confidence: analysis.confidence, thesis: analysis.thesis
+            log('DECISION', '📋 BUY queued for market open: ' + ticker + ' (score:' + analysis.signalScore + ')', {
+              ticker, signalScore: analysis.signalScore, confidence: analysis.confidence, thesis: analysis.thesis, catalyst: analysis.catalyst
             });
           } else {
             const dollars = positionDollars(portfolio, analysis.signalScore, analysis.confidence);
             if (dollars === 0) { log('DECISION', '⏭ SKIP ' + ticker + ' — score too low (' + analysis.signalScore + ')'); continue; }
             if (dollars > buyingPower) { log('DECISION', '⏭ SKIP ' + ticker + ' — insufficient buying power'); continue; }
-            log('DECISION', '✅ BUY ' + ticker + ' $' + dollars.toFixed(0) + ' (score:' + analysis.signalScore + ' conf:' + analysis.confidence + '%)', {
-              ticker, dollars, signalScore: analysis.signalScore, confidence: analysis.confidence, thesis: analysis.thesis
+            log('DECISION', '✅ EXECUTING BUY ' + ticker + ' $' + dollars.toFixed(0) + ' | ' + (analysis.thesis || ''), {
+              ticker, dollars, signalScore: analysis.signalScore, confidence: analysis.confidence,
+              thesis: analysis.thesis, catalyst: analysis.catalyst
             });
             await placeOrder(ticker, dollars, 'buy', analysis);
             buyingPower -= dollars;
@@ -313,20 +333,18 @@ async function runScan(allowForce) {
         } else if (analysis.signal === 'SELL') {
           if (isOpen) {
             const pos = Array.isArray(positions) && positions.find(p => p.symbol === ticker);
-            if (pos) { await alpaca('/v2/positions/' + ticker, { method: 'DELETE' }); log('DECISION', '🔴 SELL ' + ticker, { ticker }); }
-            else { log('DECISION', '⏭ SELL signal ' + ticker + ' but no position'); }
+            if (pos) { await alpaca('/v2/positions/' + ticker, { method: 'DELETE' }); log('DECISION', '🔴 SELL ' + ticker + ' | ' + (analysis.thesis || ''), { ticker }); }
+            else { log('DECISION', '⏭ SELL signal ' + ticker + ' — no position held'); }
           } else {
-            log('DECISION', '📋 SELL signal for ' + ticker + ' noted — will execute when market opens', { ticker });
+            log('DECISION', '📋 SELL queued for market open: ' + ticker, { ticker });
           }
         } else {
-          log('DECISION', '⏭ HOLD ' + ticker + ' (score:' + analysis.signalScore + ')', { ticker, signalScore: analysis.signalScore });
+          log('DECISION', '⏭ HOLD ' + ticker + ' (score:' + analysis.signalScore + ') — ' + (analysis.thesis || ''), { ticker, signalScore: analysis.signalScore });
         }
-
-        await new Promise(r => setTimeout(r, 15000));
-      } catch(e) { log('ERROR', 'Analysis failed ' + ticker + ': ' + e.message); }
+      } catch(e) { log('ERROR', 'Processing failed for ' + ticker + ': ' + e.message); }
     }
 
-    state.scansCompleted++;
+        state.scansCompleted++;
     state.status = 'IDLE';
     log('SCANNER', '✅ Scan complete. Total scans: ' + state.scansCompleted + ' | Total trades: ' + state.tradesExecuted);
   } catch(e) {
@@ -376,7 +394,7 @@ app.post('/intel-now', (req, res) => {
   runIntelligenceScan();
 });
 
-app.use(express.static(__dirname));
+app.get('/health', (req, res) => res.json({ ok: true, uptime: process.uptime() }));
 
 app.listen(3001, () => {
   log('AGENT', '🤖 Market Intelligence Agent running on port 3001');
