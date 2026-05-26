@@ -13,6 +13,8 @@ body {
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
 }
+
+/* HEADER */
 .header {
   background: rgba(255,255,255,0.85);
   backdrop-filter: blur(20px);
@@ -40,6 +42,7 @@ body {
 .dot-gray { background: #c7c7cc; }
 .dot-red { background: #ff3b30; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
 .header-actions { display: flex; gap: 8px; }
 .btn {
   padding: 7px 14px; border-radius: 980px;
@@ -53,7 +56,11 @@ body {
 .btn-primary:hover { background: #0077ed; }
 .btn-primary:disabled { background: #c7c7cc; }
 .btn-secondary { background: rgba(0,0,0,0.06); color: #1d1d1f; }
+
+/* PAGE */
 .page { padding: 16px; max-width: 1400px; margin: 0 auto; }
+
+/* STATS GRID - 2 col on mobile, 5 col on desktop */
 .stats-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -71,12 +78,16 @@ body {
   font-size: 11px; font-weight: 500; color: #6e6e73;
   letter-spacing: 0.3px; margin-bottom: 6px; text-transform: uppercase;
 }
-.stat-value { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; color: #1d1d1f; }
+.stat-value {
+  font-size: 20px; font-weight: 700; letter-spacing: -0.5px; color: #1d1d1f;
+}
 .stat-value.green { color: #34c759; }
 .stat-value.red { color: #ff3b30; }
 .stat-value.blue { color: #0071e3; }
 .stat-value.amber { color: #ff9500; }
 .stat-sub { font-size: 11px; color: #6e6e73; margin-top: 3px; }
+
+/* TABS - mobile navigation */
 .tabs {
   display: flex; gap: 0;
   background: rgba(0,0,0,0.06);
@@ -91,6 +102,8 @@ body {
   border: none; background: transparent; font-family: inherit;
 }
 .tab.active { background: white; color: #1d1d1f; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+
+/* CARDS */
 .card {
   background: white; border-radius: 16px;
   padding: 18px; box-shadow: 0 1px 4px rgba(0,0,0,0.06);
@@ -100,8 +113,12 @@ body {
   font-size: 12px; font-weight: 600; color: #6e6e73;
   text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px;
 }
+
+/* TAB PANELS */
 .panel { display: none; }
 .panel.active { display: block; }
+
+/* POSITIONS */
 .position-row {
   display: flex; justify-content: space-between; align-items: center;
   padding: 12px 0; border-bottom: 1px solid #f5f5f7;
@@ -112,6 +129,8 @@ body {
 .position-pnl-pct { font-size: 16px; font-weight: 600; text-align: right; }
 .position-pnl-val { font-size: 12px; color: #6e6e73; text-align: right; margin-top: 2px; }
 .empty-state { text-align: center; padding: 32px 0; color: #c7c7cc; font-size: 13px; }
+
+/* LOG */
 .log-entry {
   padding: 14px 0; border-bottom: 1px solid #f5f5f7;
   animation: fadeIn 0.3s ease;
@@ -138,6 +157,8 @@ body {
 .log-thesis { font-size: 12px; color: #6e6e73; font-style: italic; margin-top: 4px; line-height: 1.5; }
 .log-meta { font-size: 11px; color: #c7c7cc; margin-top: 4px; }
 .log-time { font-size: 11px; color: #c7c7cc; margin-top: 5px; }
+
+/* AGENT STATS */
 .agent-row {
   display: flex; justify-content: space-between; align-items: center;
   padding: 10px 0; border-bottom: 1px solid #f5f5f7;
@@ -145,12 +166,16 @@ body {
 .agent-row:last-child { border-bottom: none; }
 .agent-label { font-size: 14px; color: #6e6e73; }
 .agent-value { font-size: 14px; font-weight: 600; }
+
+/* MODE BANNER */
 .mode-banner {
   background: linear-gradient(135deg, #667eea, #764ba2);
   border-radius: 14px; padding: 16px 18px; margin-bottom: 12px; color: white;
 }
 .mode-banner-label { font-size: 11px; font-weight: 600; opacity: 0.8; margin-bottom: 3px; }
 .mode-banner-value { font-size: 18px; font-weight: 700; }
+
+/* DESKTOP LAYOUT */
 @media (min-width: 768px) {
   .page { padding: 28px 32px; }
   .stats-grid { grid-template-columns: repeat(5, 1fr); }
@@ -163,13 +188,27 @@ body {
   .panel { display: block !important; }
   .log-card { height: calc(100vh - 280px); overflow-y: auto; }
 }
+
 @media (max-width: 767px) {
   .desktop-grid { display: block; }
   .sidebar { display: none; }
   .log-panel { display: none; }
 }
+
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-thumb { background: #e5e5ea; border-radius: 4px; }
+.queue-card { background: #fff8f0; border: 1px solid #ffe4b5; border-radius: 16px; padding: 18px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); margin-bottom: 12px; }
+.queue-badge { display: inline-flex; align-items: center; gap: 5px; background: #ff9500; color: white; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 20px; margin-bottom: 12px; }
+.queue-row { display: flex; justify-content: space-between; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid #ffe4b5; }
+.queue-row:last-child { border-bottom: none; }
+.queue-ticker { font-size: 16px; font-weight: 700; color: #1d1d1f; }
+.queue-meta { font-size: 12px; color: #6e6e73; margin-top: 2px; }
+.queue-thesis { font-size: 12px; color: #92400e; font-style: italic; margin-top: 3px; line-height: 1.4; }
+.queue-right { text-align: right; flex-shrink: 0; margin-left: 12px; }
+.queue-amount { font-size: 15px; font-weight: 700; color: #34c759; }
+.queue-score { font-size: 11px; color: #6e6e73; margin-top: 2px; }
+.clear-queue-btn { width: 100%; margin-top: 12px; padding: 9px; border-radius: 10px; border: 1px solid #ffe4b5; background: white; color: #ff9500; font-size: 13px; font-weight: 500; cursor: pointer; font-family: inherit; }
+.clear-queue-btn:hover { background: #fff3e0; }
 </style>
 </head>
 <body>
@@ -189,6 +228,8 @@ body {
 </div>
 
 <div class="page">
+
+  <!-- STATS -->
   <div class="stats-grid">
     <div class="stat-card">
       <div class="stat-label">Portfolio</div>
@@ -217,13 +258,17 @@ body {
     </div>
   </div>
 
+  <!-- MOBILE TABS -->
   <div class="tabs">
-    <button class="tab active" onclick="switchTab('log', this)">Activity</button>
-    <button class="tab" onclick="switchTab('positions', this)">Positions</button>
-    <button class="tab" onclick="switchTab('stats', this)">Agent</button>
+    <button class="tab active" onclick="switchTab('log')">Activity</button>
+    <button class="tab" onclick="switchTab('positions')">Positions</button>
+    <button class="tab" onclick="switchTab('stats')">Agent</button>
   </div>
 
+  <!-- DESKTOP GRID / MOBILE PANELS -->
   <div class="desktop-grid">
+
+    <!-- SIDEBAR (desktop only) -->
     <div class="sidebar">
       <div class="mode-banner">
         <div class="mode-banner-label">Mode</div>
@@ -240,9 +285,16 @@ body {
         <div class="card-title">Open Positions</div>
         <div id="positions-list-d"><div class="empty-state">No positions</div></div>
       </div>
+      <div id="queue-card-d" style="display:none" class="queue-card">
+        <div class="queue-badge">⏳ <span id="queue-count-d">0</span> Queued for Open</div>
+        <div id="queue-list-d"></div>
+        <button class="clear-queue-btn" onclick="clearQueue()">Clear Queue</button>
+      </div>
     </div>
 
+    <!-- LOG (desktop) / MOBILE PANELS -->
     <div>
+      <!-- Mobile: Activity Panel -->
       <div class="panel active" id="panel-log">
         <div class="card" style="padding-bottom:0">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
@@ -264,10 +316,16 @@ body {
         </div>
       </div>
 
+      <!-- Mobile: Positions Panel -->
       <div class="panel" id="panel-positions">
         <div class="mode-banner">
           <div class="mode-banner-label">Mode</div>
           <div class="mode-banner-value">Paper Trading</div>
+        </div>
+        <div id="queue-card-m" style="display:none" class="queue-card">
+          <div class="queue-badge">⏳ <span id="queue-count-m">0</span> Queued for Market Open</div>
+          <div id="queue-list-m"></div>
+          <button class="clear-queue-btn" onclick="clearQueue()">Clear Queue</button>
         </div>
         <div class="card">
           <div class="card-title">Open Positions</div>
@@ -275,6 +333,7 @@ body {
         </div>
       </div>
 
+      <!-- Mobile: Stats Panel -->
       <div class="panel" id="panel-stats">
         <div class="card">
           <div class="card-title">Agent Stats</div>
@@ -282,6 +341,7 @@ body {
           <div class="agent-row"><span class="agent-label">Trades executed</span><span class="agent-value" id="trades-done-m">—</span></div>
           <div class="agent-row"><span class="agent-label">Last scan</span><span class="agent-value" id="last-scan-m">—</span></div>
           <div class="agent-row"><span class="agent-label">Open positions</span><span class="agent-value" id="open-count-m">—</span></div>
+          <div class="agent-row"><span class="agent-label">Queued orders</span><span class="agent-value amber" id="pending-count-m">0</span></div>
           <div class="agent-row"><span class="agent-label">Market status</span><span class="agent-value" id="market-status-m">—</span></div>
         </div>
         <div class="card">
@@ -299,13 +359,16 @@ body {
 
 <script>
 const BASE = 'https://alpaca-proxy-s3m9.onrender.com';
+let activeTab = 'log';
 
-function switchTab(tab, el) {
+function switchTab(tab) {
+  activeTab = tab;
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  el.classList.add('active');
+  event.target.classList.add('active');
   document.getElementById('panel-' + tab).classList.add('active');
 }
+
 function fmt(n) {
   return '$' + parseFloat(n||0).toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2});
 }
@@ -321,6 +384,7 @@ function timeAgo(iso) {
   if (d<86400) return Math.floor(d/3600)+'h ago';
   return Math.floor(d/86400)+'d ago';
 }
+
 async function loadAccount() {
   try {
     const a = await fetch(`${BASE}/alpaca/v2/account`).then(r=>r.json());
@@ -336,6 +400,7 @@ async function loadAccount() {
     tl.className = 'stat-value '+(totalPnl>=0?'green':'red');
   } catch(e) {}
 }
+
 function renderPositions(positions, listId) {
   const el = document.getElementById(listId);
   if (!Array.isArray(positions)||!positions.length) {
@@ -356,27 +421,36 @@ function renderPositions(positions, listId) {
     </div>`;
   }).join('');
 }
+
 async function loadPositions() {
   try {
     const positions = await fetch(`${BASE}/alpaca/v2/positions`).then(r=>r.json());
     const count = Array.isArray(positions)?positions.length:0;
-    ['open-count-d','open-count-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=count;});
+    ['open-count-d','open-count-m'].forEach(id=>{ const el=document.getElementById(id); if(el) el.textContent=count; });
     renderPositions(positions, 'positions-list-d');
     renderPositions(positions, 'positions-list-m');
   } catch(e) {}
 }
+
 async function loadStatus() {
   try {
     const s = await fetch(`${BASE}/status`).then(r=>r.json());
-    ['scans-done-d','scans-done-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=s.scansCompleted||0;});
-    ['trades-done-d','trades-done-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=s.tradesExecuted||0;});
-    ['last-scan-d','last-scan-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=timeAgo(s.lastScan);});
-    const mText = s.isMarketOpen?'Open':'Closed';
+    const scans = s.scansCompleted||0;
+    const trades = s.tradesExecuted||0;
+    const last = timeAgo(s.lastScan);
+    ['scans-done-d','scans-done-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=scans;});
+    ['trades-done-d','trades-done-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=trades;});
+    ['last-scan-d','last-scan-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=last;});
+
+    const mOpen = s.isMarketOpen;
+    const mText = mOpen?'Open':'Closed';
+    const mClass = 'stat-value '+(mOpen?'green':'amber');
     document.getElementById('market-status').textContent = mText;
-    document.getElementById('market-status').className = 'stat-value '+(s.isMarketOpen?'green':'amber');
-    document.getElementById('market-sub').textContent = s.isMarketOpen?'Trading active':'After hours';
+    document.getElementById('market-status').className = mClass;
+    document.getElementById('market-sub').textContent = mOpen?'Trading active':'After hours';
     const mm = document.getElementById('market-status-m');
-    if(mm){mm.textContent=mText;mm.className='agent-value '+(s.isMarketOpen?'green':'amber');}
+    if(mm){mm.textContent=mText;mm.className='agent-value '+(mOpen?'green':'amber');}
+
     const status = s.status||'IDLE';
     document.getElementById('agent-status-text').textContent = status.replace(/_/g,' ');
     const dot = document.getElementById('agent-dot');
@@ -386,6 +460,7 @@ async function loadStatus() {
     else dot.className='dot dot-green';
   } catch(e) {}
 }
+
 async function loadLog() {
   try {
     const entries = await fetch(`${BASE}/log`).then(r=>r.json());
@@ -400,7 +475,9 @@ async function loadLog() {
       if(e.dollars) meta.push('$'+parseFloat(e.dollars).toFixed(0));
       if(e.pnlPct!==undefined) meta.push((e.pnlPct>=0?'+':'')+parseFloat(e.pnlPct).toFixed(2)+'%');
       return `<div class="log-entry">
-        <div class="log-entry-top"><span class="log-tag tag-${tag}">${tag}</span>${ticker}</div>
+        <div class="log-entry-top">
+          <span class="log-tag tag-${tag}">${tag}</span>${ticker}
+        </div>
         <div class="log-msg">${e.message}</div>
         ${e.thesis?`<div class="log-thesis">"${e.thesis}"</div>`:''}
         ${meta.length?`<div class="log-meta">${meta.join(' · ')}</div>`:''}
@@ -409,6 +486,7 @@ async function loadLog() {
     }).join('');
   } catch(e) {}
 }
+
 async function triggerScan() {
   const btn = document.getElementById('scan-btn');
   btn.textContent = 'Scanning...';
@@ -419,11 +497,58 @@ async function triggerScan() {
     setTimeout(loadAll, 6000);
     setTimeout(loadAll, 15000);
     setTimeout(loadAll, 30000);
-  } catch(e) { btn.textContent='Scan Now'; btn.disabled=false; }
+  } catch(e) {
+    btn.textContent='Scan Now';btn.disabled=false;
+  }
 }
+
+function renderQueue(items, listId, countId, cardId) {
+  const card = document.getElementById(cardId);
+  const list = document.getElementById(listId);
+  const count = document.getElementById(countId);
+  if (!items || !items.length) {
+    if(card) card.style.display = 'none';
+    return;
+  }
+  if(card) card.style.display = 'block';
+  if(count) count.textContent = items.length;
+  if(list) list.innerHTML = items.map(q => `
+    <div class="queue-row">
+      <div style="flex:1">
+        <div class="queue-ticker">${q.ticker}</div>
+        <div class="queue-meta">${q.companyName || ''} · Score ${q.signalScore || '—'} · Conf ${q.confidence || '—'}%</div>
+        ${q.catalyst ? `<div class="queue-thesis">"${q.catalyst}"</div>` : ''}
+        <div class="queue-meta" style="margin-top:4px">Queued: ${q.queuedAt || '—'}</div>
+      </div>
+      <div class="queue-right">
+        <div class="queue-amount">$${q.dollars ? parseFloat(q.dollars).toFixed(0) : '—'}</div>
+        <div class="queue-score">${q.expectedReturn || ''}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function loadPending() {
+  try {
+    const items = await fetch(`${BASE}/pending`).then(r=>r.json());
+    renderQueue(items, 'queue-list-d', 'queue-count-d', 'queue-card-d');
+    renderQueue(items, 'queue-list-m', 'queue-count-m', 'queue-card-m');
+    const pm = document.getElementById('pending-count-m');
+    if(pm) pm.textContent = items.length || 0;
+  } catch(e) {}
+}
+
+async function clearQueue() {
+  try {
+    await fetch(`${BASE}/clear-queue`, {method:'POST'});
+    await loadPending();
+  } catch(e) {}
+}
+
 async function loadAll() {
-  await Promise.all([loadAccount(), loadPositions(), loadStatus(), loadLog()]);
+  await Promise.all([loadAccount(), loadPositions(), loadStatus(), loadLog(), loadPending()]);
 }
+
 loadAll();
 setInterval(loadAll, 30000);
 </script>
