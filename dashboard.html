@@ -209,6 +209,18 @@ body {
 .queue-score { font-size: 11px; color: #6e6e73; margin-top: 2px; }
 .clear-queue-btn { width: 100%; margin-top: 12px; padding: 9px; border-radius: 10px; border: 1px solid #ffe4b5; background: white; color: #ff9500; font-size: 13px; font-weight: 500; cursor: pointer; font-family: inherit; }
 .clear-queue-btn:hover { background: #fff3e0; }
+.signal-card { background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 16px; padding: 18px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); margin-bottom: 12px; }
+.signal-badge { display: inline-flex; align-items: center; gap: 5px; background: #0071e3; color: white; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 20px; margin-bottom: 12px; }
+.signal-row { padding: 12px 0; border-bottom: 1px solid #bae6fd; }
+.signal-row:last-child { border-bottom: none; }
+.signal-ticker { font-size: 15px; font-weight: 700; color: #1d1d1f; }
+.signal-catalyst { font-size: 12px; color: #0369a1; font-weight: 500; margin-top: 2px; }
+.signal-detail { font-size: 12px; color: #6e6e73; margin-top: 3px; line-height: 1.4; }
+.signal-meta { display: flex; gap: 12px; margin-top: 6px; flex-wrap: wrap; }
+.signal-chip { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; }
+.chip-buy { background: #d1f5e0; color: #1a7f37; }
+.chip-sell { background: #fee2e2; color: #991b1b; }
+.chip-score { background: #dbeafe; color: #1d4ed8; }
 </style>
 </head>
 <body>
@@ -222,7 +234,8 @@ body {
     </div>
     <div class="header-actions">
       <button class="btn btn-secondary" onclick="loadAll()">↻</button>
-      <button class="btn btn-primary" id="scan-btn" onclick="triggerScan()">Scan Now</button>
+      <button class="btn btn-secondary" onclick="triggerIntel()">Intel</button>
+      <button class="btn btn-primary" id="scan-btn" onclick="triggerScan()">Catalyst Scan</button>
     </div>
   </div>
 </div>
@@ -276,9 +289,10 @@ body {
       </div>
       <div class="card">
         <div class="card-title">Agent Activity</div>
-        <div class="agent-row"><span class="agent-label">Scans</span><span class="agent-value blue" id="scans-done-d">—</span></div>
         <div class="agent-row"><span class="agent-label">Trades</span><span class="agent-value" id="trades-done-d">—</span></div>
-        <div class="agent-row"><span class="agent-label">Last scan</span><span class="agent-value" id="last-scan-d">—</span></div>
+        <div class="agent-row"><span class="agent-label">Active signals</span><span class="agent-value blue" id="signals-count-d">—</span></div>
+        <div class="agent-row"><span class="agent-label">Queued</span><span class="agent-value amber" id="pending-count-d">0</span></div>
+        <div class="agent-row"><span class="agent-label">Last catalyst</span><span class="agent-value" id="last-catalyst-d">—</span></div>
         <div class="agent-row"><span class="agent-label">Positions</span><span class="agent-value" id="open-count-d">—</span></div>
       </div>
       <div class="card">
@@ -289,6 +303,10 @@ body {
         <div class="queue-badge">⏳ <span id="queue-count-d">0</span> Queued for Open</div>
         <div id="queue-list-d"></div>
         <button class="clear-queue-btn" onclick="clearQueue()">Clear Queue</button>
+      </div>
+      <div id="signal-card-d" style="display:none" class="signal-card">
+        <div class="signal-badge">🎯 <span id="signal-count-d">0</span> Active Signals</div>
+        <div id="signal-list-d"></div>
       </div>
     </div>
 
@@ -327,6 +345,10 @@ body {
           <div id="queue-list-m"></div>
           <button class="clear-queue-btn" onclick="clearQueue()">Clear Queue</button>
         </div>
+        <div id="signal-card-m" style="display:none" class="signal-card">
+          <div class="signal-badge">🎯 <span id="signal-count-m">0</span> Active Catalyst Signals</div>
+          <div id="signal-list-m"></div>
+        </div>
         <div class="card">
           <div class="card-title">Open Positions</div>
           <div id="positions-list-m"><div class="empty-state">No open positions</div></div>
@@ -337,11 +359,11 @@ body {
       <div class="panel" id="panel-stats">
         <div class="card">
           <div class="card-title">Agent Stats</div>
-          <div class="agent-row"><span class="agent-label">Scans completed</span><span class="agent-value blue" id="scans-done-m">—</span></div>
           <div class="agent-row"><span class="agent-label">Trades executed</span><span class="agent-value" id="trades-done-m">—</span></div>
-          <div class="agent-row"><span class="agent-label">Last scan</span><span class="agent-value" id="last-scan-m">—</span></div>
-          <div class="agent-row"><span class="agent-label">Open positions</span><span class="agent-value" id="open-count-m">—</span></div>
+          <div class="agent-row"><span class="agent-label">Active signals</span><span class="agent-value blue" id="signals-count-m">—</span></div>
           <div class="agent-row"><span class="agent-label">Queued orders</span><span class="agent-value amber" id="pending-count-m">0</span></div>
+          <div class="agent-row"><span class="agent-label">Last catalyst scan</span><span class="agent-value" id="last-catalyst-m">—</span></div>
+          <div class="agent-row"><span class="agent-label">Last intel scan</span><span class="agent-value" id="last-intel-m">—</span></div>
           <div class="agent-row"><span class="agent-label">Market status</span><span class="agent-value" id="market-status-m">—</span></div>
         </div>
         <div class="card">
@@ -350,7 +372,9 @@ body {
           <div class="agent-row"><span class="agent-label">Stop loss</span><span class="agent-value">-8%</span></div>
           <div class="agent-row"><span class="agent-label">Take profit</span><span class="agent-value">+20%</span></div>
           <div class="agent-row"><span class="agent-label">Max positions</span><span class="agent-value">10</span></div>
-          <div class="agent-row"><span class="agent-label">Scan interval</span><span class="agent-value">2 hours</span></div>
+          <div class="agent-row"><span class="agent-label">Intel scan</span><span class="agent-value">9am + 3:30pm ET</span></div>
+          <div class="agent-row"><span class="agent-label">Catalyst scan</span><span class="agent-value">Every 2 hours</span></div>
+          <div class="agent-row"><span class="agent-label">Trade check</span><span class="agent-value">Every 30 min</span></div>
         </div>
       </div>
     </div>
@@ -435,12 +459,12 @@ async function loadPositions() {
 async function loadStatus() {
   try {
     const s = await fetch(`${BASE}/status`).then(r=>r.json());
-    const scans = s.scansCompleted||0;
     const trades = s.tradesExecuted||0;
-    const last = timeAgo(s.lastScan);
-    ['scans-done-d','scans-done-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=scans;});
+    const signals = s.activeSignals||0;
     ['trades-done-d','trades-done-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=trades;});
-    ['last-scan-d','last-scan-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=last;});
+    ['signals-count-d','signals-count-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=signals;});
+    ['last-catalyst-d','last-catalyst-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=timeAgo(s.lastCatalyst);});
+    ['last-intel-m'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=timeAgo(s.lastIntel);});
 
     const mOpen = s.isMarketOpen;
     const mText = mOpen?'Open':'Closed';
@@ -484,6 +508,13 @@ async function loadLog() {
         <div class="log-time">${new Date(e.timestamp).toLocaleString()}</div>
       </div>`;
     }).join('');
+  } catch(e) {}
+}
+
+async function triggerIntel() {
+  try {
+    await fetch(`${BASE}/intel-now`, {method:'POST'});
+    setTimeout(loadAll, 8000);
   } catch(e) {}
 }
 
@@ -545,8 +576,46 @@ async function clearQueue() {
   } catch(e) {}
 }
 
+function renderSignals(items, listId, countId, cardId) {
+  const card = document.getElementById(cardId);
+  const list = document.getElementById(listId);
+  const count = document.getElementById(countId);
+  if (!items || !items.length) { if(card) card.style.display='none'; return; }
+  if(card) card.style.display='block';
+  if(count) count.textContent = items.length;
+  if(list) list.innerHTML = items.map(s => `
+    <div class="signal-row">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div style="flex:1">
+          <div class="signal-ticker">${s.ticker} <span style="font-size:12px;font-weight:400;color:#6e6e73">${s.companyName||''}</span></div>
+          <div class="signal-catalyst">${s.catalyst||''}</div>
+          <div class="signal-detail">${s.detail||''}</div>
+          <div class="signal-meta">
+            <span class="signal-chip ${s.signal==='BUY'?'chip-buy':'chip-sell'}">${s.signal}</span>
+            <span class="signal-chip chip-score">Score ${s.signalScore}</span>
+            <span style="font-size:11px;color:#6e6e73">Target $${s.targetPrice} · Stop $${s.stopLoss}</span>
+          </div>
+          <div style="font-size:11px;color:#6e6e73;margin-top:4px;font-style:italic">${s.entryLogic||''}</div>
+        </div>
+        <div style="text-align:right;margin-left:12px;flex-shrink:0">
+          <div style="font-size:14px;font-weight:700;color:#34c759">${s.expectedReturn||''}</div>
+          <div style="font-size:11px;color:#6e6e73">${s.timeframe||''}</div>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function loadSignals() {
+  try {
+    const items = await fetch(`${BASE}/signals`).then(r=>r.json());
+    renderSignals(items, 'signal-list-d', 'signal-count-d', 'signal-card-d');
+    renderSignals(items, 'signal-list-m', 'signal-count-m', 'signal-card-m');
+  } catch(e) {}
+}
+
 async function loadAll() {
-  await Promise.all([loadAccount(), loadPositions(), loadStatus(), loadLog(), loadPending()]);
+  await Promise.all([loadAccount(), loadPositions(), loadStatus(), loadLog(), loadPending(), loadSignals()]);
 }
 
 loadAll();
