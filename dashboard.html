@@ -235,6 +235,7 @@ body {
     <div class="header-actions">
       <button class="btn btn-secondary" onclick="loadAll()">↻</button>
       <button class="btn btn-secondary" onclick="triggerIntel()">Intel</button>
+      <button class="btn btn-secondary" onclick="triggerCrypto()">₿ Crypto</button>
       <button class="btn btn-primary" id="scan-btn" onclick="triggerScan()">Catalyst Scan</button>
     </div>
   </div>
@@ -373,8 +374,11 @@ body {
           <div class="agent-row"><span class="agent-label">Take profit</span><span class="agent-value">+20%</span></div>
           <div class="agent-row"><span class="agent-label">Max positions</span><span class="agent-value">10</span></div>
           <div class="agent-row"><span class="agent-label">Intel scan</span><span class="agent-value">9am + 3:30pm ET</span></div>
-          <div class="agent-row"><span class="agent-label">Catalyst scan</span><span class="agent-value">Every 2 hours</span></div>
-          <div class="agent-row"><span class="agent-label">Trade check</span><span class="agent-value">Every 30 min</span></div>
+          <div class="agent-row"><span class="agent-label">Stock catalyst</span><span class="agent-value">Every 2hrs (market)</span></div>
+          <div class="agent-row"><span class="agent-label">Crypto scan</span><span class="agent-value">Every 4hrs (24/7)</span></div>
+          <div class="agent-row"><span class="agent-label">Trade check</span><span class="agent-value">Every 30min</span></div>
+          <div class="agent-row"><span class="agent-label">Shorts</span><span class="agent-value green">Enabled</span></div>
+          <div class="agent-row"><span class="agent-label">Crypto</span><span class="agent-value green">Enabled</span></div>
         </div>
       </div>
     </div>
@@ -518,6 +522,13 @@ async function triggerIntel() {
   } catch(e) {}
 }
 
+async function triggerCrypto() {
+  try {
+    await fetch(`${BASE}/crypto-now`, {method:'POST'});
+    setTimeout(loadAll, 8000);
+  } catch(e) {}
+}
+
 async function triggerScan() {
   const btn = document.getElementById('scan-btn');
   btn.textContent = 'Scanning...';
@@ -583,27 +594,36 @@ function renderSignals(items, listId, countId, cardId) {
   if (!items || !items.length) { if(card) card.style.display='none'; return; }
   if(card) card.style.display='block';
   if(count) count.textContent = items.length;
-  if(list) list.innerHTML = items.map(s => `
-    <div class="signal-row">
+  if(list) list.innerHTML = items.map(s => {
+    const isShort = s.signal==='SHORT' || s.type==='SHORT';
+    const isCrypto = s.isCrypto || (s.symbol && s.symbol.includes('/'));
+    const typeLabel = isCrypto ? '₿ CRYPTO' : isShort ? '🔻 SHORT' : '🟢 LONG';
+    const typeColor = isCrypto ? '#ff9500' : isShort ? '#ff3b30' : '#34c759';
+    const chipClass = isShort ? 'chip-sell' : 'chip-buy';
+    const ticker = s.ticker || s.symbol || '';
+    return `<div class="signal-row">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
         <div style="flex:1">
-          <div class="signal-ticker">${s.ticker} <span style="font-size:12px;font-weight:400;color:#6e6e73">${s.companyName||''}</span></div>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+            <div class="signal-ticker">${ticker}</div>
+            <span style="font-size:10px;font-weight:700;color:${typeColor};background:${typeColor}18;padding:2px 7px;border-radius:4px">${typeLabel}</span>
+          </div>
           <div class="signal-catalyst">${s.catalyst||''}</div>
           <div class="signal-detail">${s.detail||''}</div>
           <div class="signal-meta">
-            <span class="signal-chip ${s.signal==='BUY'?'chip-buy':'chip-sell'}">${s.signal}</span>
+            <span class="signal-chip ${chipClass}">${s.signal}</span>
             <span class="signal-chip chip-score">Score ${s.signalScore}</span>
             <span style="font-size:11px;color:#6e6e73">Target $${s.targetPrice} · Stop $${s.stopLoss}</span>
           </div>
           <div style="font-size:11px;color:#6e6e73;margin-top:4px;font-style:italic">${s.entryLogic||''}</div>
         </div>
         <div style="text-align:right;margin-left:12px;flex-shrink:0">
-          <div style="font-size:14px;font-weight:700;color:#34c759">${s.expectedReturn||''}</div>
+          <div style="font-size:14px;font-weight:700;color:${typeColor}">${s.expectedReturn||''}</div>
           <div style="font-size:11px;color:#6e6e73">${s.timeframe||''}</div>
         </div>
       </div>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 }
 
 async function loadSignals() {
