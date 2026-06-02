@@ -313,17 +313,16 @@ async function runInfluencerScan() {
   log('INFLUENCER', '⚡ Scanning influencer activity — Musk, Trump, Powell, Wood, Pelosi...');
 
   const influencerList = INFLUENCERS.map(i => i.name).join(', ');
-  const prompt = `Market influence tracking agent. Search for any statements, posts, tweets, interviews, or disclosures from these individuals in the last 24 hours: ${influencerList}.
-Also check: major hedge fund 13F filings, politician stock disclosures, Fed governor speeches.
-For each activity found, identify which stocks or sectors are likely affected and estimate market impact.
-Return ONLY JSON:
-{"influencerActivity":[{"person":"Elon Musk","platform":"X (Twitter)","action":"Posted about humanoid robots being the future","relatedTickers":["NVDA","TSLA","IRBT"],"relatedSectors":["Robotics","AI"],"estimatedImpact":"+2-4% for robotics sector","impactLagHours":2,"confidence":78,"sentiment":"BULLISH","urgency":"MEDIUM","tradingImplication":"Consider NVDA and robotics ETFs - Musk robotics posts historically drive 3.2% avg sector move"},{"person":"Jerome Powell","platform":"Fed Statement","action":"Signaled rate cuts may be delayed due to inflation","relatedTickers":["SPY","QQQ","TLT"],"relatedSectors":["Financials","Tech","Bonds"],"estimatedImpact":"-1 to -2% broad market","impactLagHours":1,"confidence":85,"sentiment":"BEARISH","urgency":"HIGH","tradingImplication":"Defensive positioning - consider short tech or long financials"}]}
-Return ONLY JSON with real activity found.`;
+  const prompt = `Search for market-moving statements from these people in last 24hrs: ${influencerList}.
+Return ONLY JSON (max 2 items, keep all strings under 100 chars):
+{"influencerActivity":[{"person":"Elon Musk","platform":"X","action":"Posted about AI robots","relatedTickers":["NVDA","TSLA"],"relatedSectors":["AI"],"estimatedImpact":"+2-3%","impactLagHours":2,"confidence":75,"sentiment":"BULLISH","urgency":"MEDIUM","tradingImplication":"NVDA benefits from AI hardware demand"}]}
+If nothing found: {"influencerActivity":[]}
+Return ONLY JSON.`;
 
   try {
     const result = await callClaude(prompt,
-      'Search for recent statements, posts, and disclosures from Elon Musk, Donald Trump, Jerome Powell, Cathie Wood, Nancy Pelosi, Michael Burry, Warren Buffett in last 24 hours.',
-      800
+      'Any market-moving news from Elon Musk, Trump, Powell, Cathie Wood, or Pelosi in last 24 hours?',
+      650
     );
 
     const activities = result.influencerActivity || [];
@@ -449,17 +448,16 @@ async function runCryptoScan() {
   state.lastCrypto = new Date().toISOString();
   log('CRYPTO', '₿ Running crypto scan...');
 
-  const prompt = `Crypto trading agent. Search for the strongest buy or sell signal across BTC, ETH, SOL, AVAX, LINK, DOGE right now.
-Look for: price breakouts, RSI signals, on-chain whale activity, ETF flows, funding rates, social sentiment, protocol news.
-Include full factor breakdown.
-Return ONLY JSON:
-{"cryptoSignals":[{"symbol":"BTC/USD","name":"Bitcoin","signal":"BUY","signalScore":82,"confidence":76,"currentPrice":68500,"catalyst":"ETF inflow surge + breakout above resistance","detail":"Spot ETF $500M inflow. RSI 58. Whale wallets accumulating. Broke $68k resistance.","entryLogic":"Buy at market, add dips to $66k","targetPrice":75000,"stopLoss":64000,"expectedReturn":"+9.5%","timeframe":"3-10 days","thesis":"ETF demand + technical breakout = bullish continuation","factorBreakdown":{"technicalFactor":80,"onChainFactor":75,"sentimentFactor":70,"flowsFactor":85},"uncertaintyScore":28,"volatilityEstimate":"VERY_HIGH","riskScore":35}]}
-symbol: BTC/USD, ETH/USD, SOL/USD, AVAX/USD, LINK/USD, or DOGE/USD. Return ONLY JSON.`;
+  const prompt = `Search crypto markets for the best trade right now. Pick ONE of: BTC/USD, ETH/USD, SOL/USD, AVAX/USD, LINK/USD, DOGE/USD.
+Return this exact JSON with real data:
+{"cryptoSignals":[{"symbol":"BTC/USD","name":"Bitcoin","signal":"BUY","signalScore":80,"confidence":74,"currentPrice":68500,"catalyst":"Short catalyst","detail":"Short detail under 80 chars","entryLogic":"Entry logic","targetPrice":75000,"stopLoss":64000,"expectedReturn":"+9%","timeframe":"3-7 days","thesis":"Short thesis","factorBreakdown":{"technicalFactor":78,"sentimentFactor":72,"flowsFactor":80},"riskScore":30}]}
+If insufficient data found, return: {"cryptoSignals":[]}
+Return ONLY JSON.`;
 
   try {
     const result = await callClaude(prompt,
-      'Search for the strongest crypto signal right now — BTC, ETH, SOL, AVAX, LINK, DOGE. Check price levels, RSI, on-chain data, ETF flows, sentiment.',
-      700
+      'What is the strongest crypto buy or sell signal right now? Check BTC ETH SOL price action and sentiment.',
+      600
     );
     const newSignals = result.cryptoSignals || [];
     newSignals.forEach(signal => {
@@ -628,6 +626,50 @@ async function placeOrder(ticker, dollars, side, analysis, isCrypto) {
   } catch(e) { log('ERROR', 'Order failed ' + ticker + ': ' + e.message); return null; }
 }
 
+// Track last sell evaluation per ticker to avoid repeated calls
+const sellEvalCache = {};
+
+// Smart sell evaluation - asks Claude before closing a profitable position
+async function shouldSell(ticker, pnlPct, entryPrice, currentPrice, isCrypto) {
+  const cacheKey = ticker;
+  const lastEval = sellEvalCache[cacheKey];
+  const fourHours = 4 * 60 * 60 * 1000;
+  // Only re-evaluate every 4 hours per position
+  if (lastEval && (Date.now() - lastEval.timestamp) < fourHours) {
+    return lastEval.decision;
+  }
+  try {
+    const prompt = `Position analysis: ${ticker} is up +${pnlPct.toFixed(1)}% (entry $${entryPrice}, now $${currentPrice}). 
+Should we SELL now to lock in profit, or HOLD for more upside? Consider current market conditions, momentum, and whether the original thesis still holds.
+Return ONLY JSON: {"decision":"SELL","reason":"Short reason under 60 chars","confidence":80}
+decision must be SELL or HOLD. Return ONLY JSON.`;
+    // No web search for this - just reasoning (cheaper)
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001', max_tokens: 150,
+        system: prompt + '\n\nReturn ONLY valid JSON starting with {',
+        messages: [{ role: 'user', content: 'Sell or hold ' + ticker + ' at +' + pnlPct.toFixed(1) + '%?' }]
+      })
+    });
+    const d = await r.json();
+    const text = d.content.map(b => b.type === 'text' ? b.text : '').join('');
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      const result = JSON.parse(match[0]);
+      sellEvalCache[cacheKey] = { timestamp: Date.now(), decision: result.decision === 'SELL' };
+      if (result.decision === 'HOLD') {
+        log('PROFIT', '🤔 AI says HOLD ' + ticker + ' at +' + pnlPct.toFixed(1) + '% — ' + (result.reason || ''), { ticker, pnlPct });
+      }
+      return result.decision === 'SELL';
+    }
+  } catch(e) {
+    log('ERROR', 'Sell evaluation failed for ' + ticker + ': ' + e.message);
+  }
+  return true; // Default to sell if evaluation fails
+}
+
 // ── MANAGE POSITIONS ──────────────────────────────────────────────
 async function managePositions(positions) {
   if (!positions) positions = await alpaca('/v2/positions');
@@ -637,13 +679,31 @@ async function managePositions(positions) {
     const isCrypto = p.asset_class === 'crypto';
     const isShort = parseFloat(p.qty) < 0;
     const stopThreshold = isCrypto ? -12 : -8;
-    const profitThreshold = isCrypto ? 25 : 20;
+    const profitWarning = isCrypto ? 18 : 15;  // Start evaluating here
+    const profitHard = isCrypto ? 30 : 25;     // Hard exit regardless of AI opinion
+
     if (pnl <= stopThreshold) {
+      // Hard stop loss — no AI evaluation, just exit immediately
       log('RISK', '🛑 Stop loss: ' + p.symbol + ' at ' + pnl.toFixed(1) + '%', { ticker: p.symbol, pnlPct: pnl, reason: 'STOP_LOSS', isShort, isCrypto });
       await alpaca('/v2/positions/' + encodeURIComponent(p.symbol), { method: 'DELETE' });
-    } else if (pnl >= profitThreshold) {
-      log('PROFIT', '🎯 Take profit: ' + p.symbol + ' at +' + pnl.toFixed(1) + '%', { ticker: p.symbol, pnlPct: pnl, reason: 'TAKE_PROFIT', isShort, isCrypto });
+      delete sellEvalCache[p.symbol];
+
+    } else if (pnl >= profitHard) {
+      // Hard take profit ceiling — always exit
+      log('PROFIT', '🎯 Hard take profit: ' + p.symbol + ' at +' + pnl.toFixed(1) + '%', { ticker: p.symbol, pnlPct: pnl, reason: 'TAKE_PROFIT_HARD', isShort, isCrypto });
       await alpaca('/v2/positions/' + encodeURIComponent(p.symbol), { method: 'DELETE' });
+      delete sellEvalCache[p.symbol];
+
+    } else if (pnl >= profitWarning) {
+      // Smart exit zone — ask Claude if we should sell or hold for more
+      const entryPrice = parseFloat(p.avg_entry_price || 0);
+      const currentPrice = parseFloat(p.current_price || 0);
+      const sell = await shouldSell(p.symbol, pnl, entryPrice, currentPrice, isCrypto);
+      if (sell) {
+        log('PROFIT', '🎯 AI-confirmed sell: ' + p.symbol + ' at +' + pnl.toFixed(1) + '%', { ticker: p.symbol, pnlPct: pnl, reason: 'TAKE_PROFIT_AI', isShort, isCrypto });
+        await alpaca('/v2/positions/' + encodeURIComponent(p.symbol), { method: 'DELETE' });
+        delete sellEvalCache[p.symbol];
+      }
     }
   }
 }

@@ -184,10 +184,10 @@ body { background: #f5f5f7; color: #1d1d1f; font-family: -apple-system, BlinkMac
 
   <!-- STATS -->
   <div class="stats-grid">
-    <div class="stat-card"><div class="stat-label">Portfolio</div><div class="stat-value" id="portfolio">—</div><div class="stat-sub">Paper account</div></div>
-    <div class="stat-card"><div class="stat-label">Buying Power</div><div class="stat-value green" id="buying-power">—</div><div class="stat-sub">Available</div></div>
-    <div class="stat-card"><div class="stat-label">Today P&L</div><div class="stat-value" id="today-pnl">—</div><div class="stat-sub">Since open</div></div>
-    <div class="stat-card"><div class="stat-label">Total P&L</div><div class="stat-value" id="total-pnl">—</div><div class="stat-sub">All time</div></div>
+    <div class="stat-card"><div class="stat-label">Portfolio</div><div class="stat-value" id="portfolio">—</div><div class="stat-sub">Total account value</div></div>
+    <div class="stat-card"><div class="stat-label">Invested</div><div class="stat-value blue" id="invested">—</div><div class="stat-sub" id="invested-sub">Capital in positions</div></div>
+    <div class="stat-card"><div class="stat-label">Unrealized P&L</div><div class="stat-value" id="unrealized-pnl">—</div><div class="stat-sub" id="unrealized-pct">On invested capital</div></div>
+    <div class="stat-card"><div class="stat-label">Today P&L</div><div class="stat-value" id="today-pnl">—</div><div class="stat-sub">Since market open</div></div>
     <div class="stat-card wide"><div class="stat-label">Market</div><div class="stat-value" id="market-status">—</div><div class="stat-sub" id="market-sub">US Equities</div></div>
   </div>
 
@@ -368,36 +368,81 @@ function setClass(id, cls) { const el=document.getElementById(id); if(el) el.cla
 
 async function loadAccount() {
   try {
-    const a = await fetch(`${BASE}/alpaca/v2/account`).then(r=>r.json());
-    const todayPnl = parseFloat(a.equity||0)-parseFloat(a.last_equity||0);
-    const totalPnl = parseFloat(a.equity||0)-100000;
+    const [a, positions] = await Promise.all([
+      fetch(`${BASE}/alpaca/v2/account`).then(r=>r.json()),
+      fetch(`${BASE}/alpaca/v2/positions`).then(r=>r.json())
+    ]);
+
+    const todayPnl = parseFloat(a.equity||0) - parseFloat(a.last_equity||0);
     setEl('portfolio', fmt(a.portfolio_value));
-    setEl('buying-power', fmt(a.buying_power));
-    const tp=document.getElementById('today-pnl');
-    if(tp){tp.textContent=fmtPnl(todayPnl);tp.className='stat-value '+(todayPnl>=0?'green':'red');}
-    const tl=document.getElementById('total-pnl');
-    if(tl){tl.textContent=fmtPnl(totalPnl);tl.className='stat-value '+(totalPnl>=0?'green':'red');}
+
+    // Calculate invested capital and unrealized P&L from positions
+    if (Array.isArray(positions) && positions.length > 0) {
+      const invested = positions.reduce((sum, p) => sum + Math.abs(parseFloat(p.market_value||0)), 0);
+      const unrealizedPnl = positions.reduce((sum, p) => sum + parseFloat(p.unrealized_pl||0), 0);
+      const returnPct = invested > 0 ? (unrealizedPnl / invested) * 100 : 0;
+
+      const investedEl = document.getElementById('invested');
+      if(investedEl){ investedEl.textContent = fmt(invested); investedEl.className = 'stat-value blue'; }
+      setEl('invested-sub', positions.length + ' open position' + (positions.length!==1?'s':''));
+
+      const upnlEl = document.getElementById('unrealized-pnl');
+      if(upnlEl){ upnlEl.textContent = fmtPnl(unrealizedPnl); upnlEl.className = 'stat-value ' + (unrealizedPnl>=0?'green':'red'); }
+      const upctEl = document.getElementById('unrealized-pct');
+      if(upctEl){ upctEl.textContent = (returnPct>=0?'+':'') + returnPct.toFixed(2) + '% return on invested'; upctEl.style.color = returnPct>=0?'#34c759':'#ff3b30'; }
+    } else {
+      setEl('invested', '$0.00');
+      setEl('invested-sub', 'No open positions');
+      const upnlEl = document.getElementById('unrealized-pnl');
+      if(upnlEl){ upnlEl.textContent = '$0.00'; upnlEl.className = 'stat-value'; }
+      setEl('unrealized-pct', 'No positions open');
+    }
+
+    const tp = document.getElementById('today-pnl');
+    if(tp){ tp.textContent = fmtPnl(todayPnl); tp.className = 'stat-value '+(todayPnl>=0?'green':'red'); }
   } catch(e){}
 }
 
 function renderPositionHTML(p) {
   const pct = parseFloat(p.unrealized_plpc)*100;
   const qty = parseFloat(p.qty);
+  const pl = parseFloat(p.unrealized_pl||0);
+  const mv = Math.abs(parseFloat(p.market_value||0));
+  const entry = parseFloat(p.avg_entry_price||0);
+  const current = parseFloat(p.current_price||0);
   const col = pct>=0?'#34c759':'#ff3b30';
   const isShort = qty<0, isCrypto = p.asset_class==='crypto';
   const typeLabel = isCrypto?'₿ CRYPTO':isShort?'SHORT':'LONG';
   const typeColor = isCrypto?'#ff9500':isShort?'#ff3b30':'#34c759';
-  return `<div class="position-row">
-    <div>
-      <div style="display:flex;align-items:center;gap:6px">
-        <span class="position-ticker">${p.symbol}</span>
-        <span class="type-badge" style="background:${typeColor}18;color:${typeColor}">${typeLabel}</span>
+
+  // Smart exit zone indicator
+  const absQty = Math.abs(qty);
+  const stopThresh = isCrypto ? -12 : -8;
+  const warnThresh = isCrypto ? 18 : 15;
+  const hardThresh = isCrypto ? 30 : 25;
+  let statusBadge = '';
+  if (pct <= stopThresh + 3) statusBadge = '<span style="font-size:9px;background:#fee2e2;color:#991b1b;padding:1px 6px;border-radius:3px;font-weight:700">⚠ NEAR STOP</span>';
+  else if (pct >= warnThresh) statusBadge = '<span style="font-size:9px;background:#d1f5e0;color:#1a7f37;padding:1px 6px;border-radius:3px;font-weight:700">🤔 AI EVALUATING</span>';
+
+  return `<div class="position-row" style="flex-direction:column;align-items:stretch;gap:8px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span class="position-ticker">${p.symbol}</span>
+          <span class="type-badge" style="background:${typeColor}18;color:${typeColor}">${typeLabel}</span>
+          ${statusBadge}
+        </div>
+        <div class="position-meta" style="margin-top:3px">${absQty.toFixed(isCrypto?6:0)} ${isCrypto?'units':'shares'} · Entry $${entry.toFixed(isCrypto?2:2)} → Now $${current.toFixed(isCrypto?2:2)}</div>
       </div>
-      <div class="position-meta">${Math.abs(qty).toFixed(isCrypto?6:0)} ${isCrypto?'units':'shares'} · ${fmt(p.current_price)}</div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-size:16px;font-weight:800;color:${col}">${pct>=0?'+':''}${pct.toFixed(2)}%</div>
+        <div style="font-size:12px;font-weight:600;color:${col}">${pl>=0?'+':''}${fmt(Math.abs(pl))}</div>
+      </div>
     </div>
-    <div style="text-align:right">
-      <div style="font-size:15px;font-weight:700;color:${col}">${pct>=0?'+':''}${pct.toFixed(2)}%</div>
-      <div style="font-size:11px;color:#6e6e73">${fmtPnl(p.unrealized_pl)}</div>
+    <div style="display:flex;justify-content:space-between;background:#f9f9f9;border-radius:8px;padding:7px 10px">
+      <div><div style="font-size:9px;color:#6e6e73;text-transform:uppercase;letter-spacing:0.5px">Invested</div><div style="font-size:12px;font-weight:700">${fmt(mv)}</div></div>
+      <div style="text-align:center"><div style="font-size:9px;color:#6e6e73;text-transform:uppercase;letter-spacing:0.5px">Return</div><div style="font-size:12px;font-weight:700;color:${col}">${pct>=0?'+':''}${pct.toFixed(2)}%</div></div>
+      <div style="text-align:right"><div style="font-size:9px;color:#6e6e73;text-transform:uppercase;letter-spacing:0.5px">Stop / Target</div><div style="font-size:11px;font-weight:600">${isCrypto?'-12% / +25%':'-8% / AI'}</div></div>
     </div>
   </div>`;
 }
