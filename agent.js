@@ -19,6 +19,8 @@ const TELEGRAM_TOKEN   = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const ALPACA_BASE      = 'https://paper-api.alpaca.markets';
 const ALPACA_DATA      = 'https://data.alpaca.markets';
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
 const INTEL_TIMES         = ['09:00', '15:30'];
 const CATALYST_INTERVAL   = 120;
