@@ -61,6 +61,23 @@ function log(type, message, data) {
   if (decisionLog.length > 500) decisionLog.length = 500;
   console.log('[' + type + '] ' + message);
   if (['TRADE','RISK','PROFIT','INFLUENCER'].includes(type)) sendAlert(type, message, data);
+  // Write to Supabase async (fire and forget — don't block agent)
+  if (SUPABASE_URL && type !== 'DNA') {
+    dbInsert('decision_log', {
+      type, message,
+      ticker: data?.ticker || null,
+      signal_score: data?.signalScore || null,
+      confidence: data?.confidence || null,
+      dollars: data?.dollars || null,
+      pnl_pct: data?.pnlPct || null,
+      catalyst: data?.catalyst || null,
+      thesis: data?.thesis || null,
+      agent_votes: data?.agentVotes ? JSON.stringify(data.agentVotes) : null,
+      factor_breakdown: data?.factorBreakdown ? JSON.stringify(data.factorBreakdown) : null,
+      risk_score: data?.riskScore || null,
+      is_crypto: data?.isCrypto || false,
+    }).catch(() => {});
+  }
 }
 
 // ── ALERTS ────────────────────────────────────────────────────────
@@ -192,14 +209,12 @@ function updateWatchlists(signal) {
 // ── TRADE DNA ─────────────────────────────────────────────────────
 function recordTradeOutcome(ticker, entryPrice, exitPrice, catalyst, signalScore, reason) {
   const returnPct = entryPrice > 0 ? ((exitPrice-entryPrice)/entryPrice)*100 : 0;
-  tradeDNA.push({
-    ticker, entryPrice, exitPrice, catalyst, signalScore,
-    returnPct: parseFloat(returnPct.toFixed(2)),
-    profitable: returnPct > 0,
-    reason, date: new Date().toISOString()
-  });
+  const record = { ticker, entryPrice, exitPrice, catalyst, signalScore, returnPct: parseFloat(returnPct.toFixed(2)), profitable: returnPct > 0, reason, date: new Date().toISOString() };
+  tradeDNA.push(record);
   if (tradeDNA.length > 200) tradeDNA.shift();
   log('DNA', '📊 Trade recorded: '+ticker+' '+returnPct.toFixed(1)+'% ['+reason+']', { ticker, returnPct, profitable: returnPct>0 });
+  // Persist to Supabase
+  dbInsert('trade_dna', { ticker, entry_price:entryPrice, exit_price:exitPrice, return_pct:record.returnPct, profitable:record.profitable, catalyst, signal_score:signalScore, reason }).catch(()=>{});
 }
 
 function getTradeDNASummary() {
@@ -370,6 +385,8 @@ Return ONLY JSON.`;
       activity.foundAt = new Date().toISOString();
       influencerAlerts.unshift(activity);
       if (influencerAlerts.length>50) influencerAlerts.length=50;
+      // Persist to Supabase
+      dbInsert('influencer_alerts', { person:activity.person, platform:activity.platform, action:activity.action, related_tickers:activity.relatedTickers||[], estimated_impact:activity.estimatedImpact, confidence:activity.confidence, sentiment:activity.sentiment, urgency:activity.urgency, trading_implication:activity.tradingImplication }).catch(()=>{});
       const urgEmoji = activity.urgency==='HIGH'?'🚨':'⚡';
       log('INFLUENCER', urgEmoji+' '+activity.person+': '+activity.action, {
         person:activity.person, platform:activity.platform, relatedTickers:activity.relatedTickers,
@@ -431,6 +448,8 @@ Return ONLY JSON.`;
       const existing = catalystSignals.findIndex(s=>s.ticker===signal.ticker);
       if (existing>=0) catalystSignals[existing]=signal; else catalystSignals.push(signal);
       updateWatchlists(signal);
+      // Persist signal to Supabase
+      dbUpsert('active_signals', { ticker:signal.ticker, signal:signal.signal, type:signal.type, signal_score:signal.signalScore, confidence:signal.confidence, catalyst:signal.catalyst, detail:signal.detail, thesis:signal.thesis, target_price:signal.targetPrice, stop_loss:signal.stopLoss, expected_return:signal.expectedReturn, timeframe:signal.timeframe, factor_breakdown:signal.factorBreakdown?JSON.stringify(signal.factorBreakdown):null, conviction:signal.conviction?JSON.stringify(signal.conviction):null, risk_score:signal.riskScore, is_crypto:false, found_at:signal.foundAt, updated_at:new Date().toISOString() }).catch(()=>{});
 
       const emoji = signal.type==='SHORT'?'🔻':'🔺';
       const agentSummary = agentVotes.map(v=>v.agent+':'+v.vote).join(' | ');
@@ -476,6 +495,8 @@ Return ONLY JSON.`;
       const existing = cryptoSignals.findIndex(s=>s.symbol===signal.symbol);
       if (existing>=0) cryptoSignals[existing]=signal; else cryptoSignals.push(signal);
       updateWatchlists(signal);
+      // Persist crypto signal to Supabase
+      dbUpsert('active_signals', { ticker:signal.symbol, signal:signal.signal, type:'CRYPTO', signal_score:signal.signalScore, confidence:signal.confidence, catalyst:signal.catalyst, detail:signal.detail, thesis:signal.thesis, target_price:signal.targetPrice, stop_loss:signal.stopLoss, expected_return:signal.expectedReturn, timeframe:signal.timeframe, factor_breakdown:signal.factorBreakdown?JSON.stringify(signal.factorBreakdown):null, risk_score:signal.riskScore, is_crypto:true, found_at:signal.foundAt, updated_at:new Date().toISOString() }).catch(()=>{});
       log('CRYPTO', (signal.signal==='BUY'?'🟢':'🔴')+' '+signal.signal+': '+signal.symbol+' — '+signal.catalyst, {
         ticker:signal.symbol, signal:signal.signal, signalScore:signal.signalScore,
         confidence:signal.confidence, thesis:signal.thesis, catalyst:signal.catalyst,
@@ -570,6 +591,7 @@ async function placeOrder(ticker, dollars, side, analysis, isCrypto) {
     if (order.id) {
       state.tradesExecuted++;
       pendingQueue=pendingQueue.filter(p=>p.ticker!==ticker);
+      dbDelete('pending_queue', 'ticker=eq.'+ticker).catch(()=>{});
       const typeLabel=isCrypto?'₿ CRYPTO':side==='sell'?'🔻 SHORT':'🟢 LONG';
       const conviction = analysis?.conviction;
       log('TRADE', typeLabel+' executed: '+ticker+' $'+dollars.toFixed(0)+(conviction?' | Prob:'+conviction.probability+'% RR:'+conviction.riskReward:''), {
@@ -618,6 +640,7 @@ async function runTradeCheck() {
           log('TRADE','🗑 Expired: '+ticker);
           if (isCrypto) cryptoSignals=cryptoSignals.filter(s=>s.symbol!==ticker);
           else catalystSignals=catalystSignals.filter(s=>s.ticker!==ticker);
+          dbDelete('active_signals', 'ticker=eq.'+ticker).catch(()=>{});
           continue;
         }
 
@@ -740,7 +763,14 @@ app.post('/clear-queue',    (req,res) => { const n=pendingQueue.length; pendingQ
 app.use(express.static(__dirname));
 app.listen(3001, () => {
   log('AGENT','🤖 Market Intelligence Agent v4 running on port 3001');
-  setTimeout(runCryptoScan, 15000);
-  setTimeout(runInfluencerScan, 45000);
-  setTimeout(runCatalystScan, 90000);
+  // Restore from Supabase first, then start scans
+  initFromDB().then(() => {
+    setTimeout(runCryptoScan, 20000);
+    setTimeout(runInfluencerScan, 50000);
+    setTimeout(runCatalystScan, 100000);
+  }).catch(() => {
+    setTimeout(runCryptoScan, 20000);
+    setTimeout(runInfluencerScan, 50000);
+    setTimeout(runCatalystScan, 100000);
+  });
 });
