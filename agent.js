@@ -666,7 +666,7 @@ Return ONLY JSON.`;
   try{
     const result=await callClaude(prompt,'Find one strong LONG and one SHORT catalyst right now — earnings vs estimates, analyst actions, insider activity.',1000,true);
     const newSignals=result.catalysts||[];
-    for(const signal of newSignals){
+    for(let signal of newSignals){
       signal.riskScore=scoreRisk(signal);signal.riskLabel=getRiskLabel(signal.riskScore);signal.foundAt=new Date().toISOString();
       log('CATALYST','🤖 Running 5-agent analysis for '+signal.ticker+'...');
       const agentVotes=await runMultiAgentAnalysis(signal);
