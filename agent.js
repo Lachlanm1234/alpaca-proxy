@@ -9,7 +9,7 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
- 
+
 // ── CONFIG ────────────────────────────────────────────────────────
 const ALPACA_KEY       = process.env.ALPACA_KEY;
 const ALPACA_SECRET    = process.env.ALPACA_SECRET;
@@ -19,15 +19,19 @@ const TELEGRAM_TOKEN   = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const SUPABASE_URL     = process.env.SUPABASE_URL;
 const SUPABASE_KEY     = process.env.SUPABASE_KEY;
+const FINNHUB_KEY      = process.env.FINNHUB_KEY;
+const MASSIVE_KEY      = process.env.MASSIVE_KEY;
 const ALPACA_BASE      = 'https://paper-api.alpaca.markets';
 const ALPACA_DATA      = 'https://data.alpaca.markets';
- 
+const FINNHUB_BASE     = 'https://finnhub.io/api/v1';
+const MASSIVE_BASE     = 'https://api.massiveapi.com/v1';
+
 const INTEL_TIMES         = ['09:00', '15:30'];
 const CATALYST_INTERVAL   = 120;
 const CRYPTO_INTERVAL     = 240;
 const INFLUENCER_INTERVAL = 180;
 const TRADE_CHECK_MINS    = 30;
- 
+
 const INFLUENCERS = [
   { name:'Elon Musk',      sectors:['EV','crypto','AI','space'],   avgImpact:'+3.2%', lagHours:2  },
   { name:'Donald Trump',   sectors:['defense','energy','banking'], avgImpact:'+/-2.8%',lagHours:1  },
@@ -37,7 +41,7 @@ const INFLUENCERS = [
   { name:'Michael Burry',  sectors:['value','shorts'],             avgImpact:'+/-3.1%',lagHours:12 },
   { name:'Warren Buffett', sectors:['value','insurance','banks'],  avgImpact:'+1.8%', lagHours:6  },
 ];
- 
+
 // ── STATE ─────────────────────────────────────────────────────────
 let state = {
   status:'IDLE', lastIntel:null, lastCatalyst:null, lastCrypto:null,
@@ -56,10 +60,10 @@ let watchlists       = {
   'Crypto Momentum':[], 'Influencer Plays':[], 'High Risk / Hype':[],
 };
 const sellEvalCache = {};
- 
+
 // ── SUPABASE ──────────────────────────────────────────────────────
 const DB = SUPABASE_URL && SUPABASE_KEY;
- 
+
 async function dbInsert(table, data) {
   if (!DB) return false;
   try {
@@ -71,7 +75,7 @@ async function dbInsert(table, data) {
     return r.ok;
   } catch(e) { return false; }
 }
- 
+
 async function dbUpsert(table, data) {
   if (!DB) return false;
   try {
@@ -83,7 +87,7 @@ async function dbUpsert(table, data) {
     return r.ok;
   } catch(e) { return false; }
 }
- 
+
 async function dbSelect(table, query) {
   if (!DB) return [];
   try {
@@ -93,7 +97,7 @@ async function dbSelect(table, query) {
     return r.ok ? r.json() : [];
   } catch(e) { return []; }
 }
- 
+
 async function dbDelete(table, filter) {
   if (!DB) return false;
   try {
@@ -104,18 +108,163 @@ async function dbDelete(table, filter) {
     return r.ok;
   } catch(e) { return false; }
 }
- 
+
+// ── FINNHUB HELPERS ───────────────────────────────────────────────
+async function finnhub(path) {
+  if (!FINNHUB_KEY) return null;
+  try {
+    const r = await fetch(`${FINNHUB_BASE}${path}&token=${FINNHUB_KEY}`);
+    if (!r.ok) return null;
+    return r.json();
+  } catch(e) { return null; }
+}
+
+// Real EPS vs estimate — actual hard numbers
+async function getEPSSurprise(ticker) {
+  const data = await finnhub(`/stock/earnings?symbol=${ticker}&limit=4`);
+  if (!data || !data.length) return null;
+  const latest = data[0];
+  if (!latest.actual && latest.actual !== 0) return null;
+  const surprise = latest.estimate ? ((latest.actual - latest.estimate) / Math.abs(latest.estimate) * 100) : 0;
+  return {
+    ticker,
+    period: latest.period,
+    epsActual: latest.actual,
+    epsEstimate: latest.estimate,
+    surprisePct: parseFloat(surprise.toFixed(2)),
+    revenueActual: latest.revenueActual || null,
+    revenueEstimate: latest.revenueEstimate || null,
+    beat: surprise > 0,
+    strongBeat: surprise > 5,
+    strongMiss: surprise < -5,
+  };
+}
+
+// Analyst consensus ratings
+async function getAnalystRatings(ticker) {
+  const data = await finnhub(`/stock/recommendation?symbol=${ticker}`);
+  if (!data || !data.length) return null;
+  const latest = data[0];
+  const total = (latest.buy||0) + (latest.hold||0) + (latest.sell||0) + (latest.strongBuy||0) + (latest.strongSell||0);
+  if (!total) return null;
+  const bullish = ((latest.buy||0) + (latest.strongBuy||0)) / total * 100;
+  return {
+    ticker,
+    period: latest.period,
+    buy: latest.buy || 0,
+    strongBuy: latest.strongBuy || 0,
+    hold: latest.hold || 0,
+    sell: latest.sell || 0,
+    strongSell: latest.strongSell || 0,
+    bullishPct: Math.round(bullish),
+    consensus: bullish > 65 ? 'BUY' : bullish < 35 ? 'SELL' : 'HOLD',
+  };
+}
+
+// Real insider transactions from SEC filings
+async function getInsiderActivity(ticker) {
+  const data = await finnhub(`/stock/insider-transactions?symbol=${ticker}`);
+  if (!data || !data.data || !data.data.length) return null;
+  const recent = data.data.slice(0, 10);
+  const buys = recent.filter(t => t.transactionType === 'P - Purchase' || t.change > 0);
+  const sells = recent.filter(t => t.transactionType === 'S - Sale' || t.change < 0);
+  const netShares = recent.reduce((s, t) => s + (t.change || 0), 0);
+  return {
+    ticker,
+    recentBuys: buys.length,
+    recentSells: sells.length,
+    netShares,
+    netActivity: netShares > 0 ? 'NET_BUYING' : netShares < 0 ? 'NET_SELLING' : 'NEUTRAL',
+    transactions: recent.slice(0, 3).map(t => ({
+      name: t.name,
+      shares: Math.abs(t.change || 0),
+      type: t.change > 0 ? 'BUY' : 'SELL',
+      date: t.transactionDate,
+    })),
+  };
+}
+
+// Upcoming earnings calendar for next N days
+async function getUpcomingEarnings(days) {
+  days = days || 2;
+  const today = new Date();
+  const future = new Date(today);
+  future.setDate(future.getDate() + days);
+  const from = today.toISOString().split('T')[0];
+  const to = future.toISOString().split('T')[0];
+  const data = await finnhub(`/calendar/earnings?from=${from}&to=${to}`);
+  if (!data || !data.earningsCalendar) return [];
+  return data.earningsCalendar
+    .filter(e => e.symbol && e.epsEstimate)
+    .map(e => ({
+      ticker: e.symbol,
+      date: e.date,
+      time: e.hour || 'unknown',
+      epsEstimate: e.epsEstimate,
+      revenueEstimate: e.revenueEstimate || null,
+    }));
+}
+
+// Company news sentiment from Finnhub
+async function getCompanyNews(ticker) {
+  const to = new Date().toISOString().split('T')[0];
+  const from = new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0];
+  const data = await finnhub(`/company-news?symbol=${ticker}&from=${from}&to=${to}`);
+  if (!data || !data.length) return [];
+  return data.slice(0, 5).map(n => ({ headline: n.headline, source: n.source, url: n.url, datetime: n.datetime }));
+}
+
+// Basic financials / valuation metrics
+async function getMetrics(ticker) {
+  const data = await finnhub(`/stock/metric?symbol=${ticker}&metric=all`);
+  if (!data || !data.metric) return null;
+  const m = data.metric;
+  return {
+    ticker,
+    pe: m.peNormalizedAnnual || m.peTTM || null,
+    eps: m.epsTTM || null,
+    revenueGrowth: m.revenueGrowthTTMYoy || null,
+    grossMargin: m.grossMarginTTM || null,
+    beta: m.beta || null,
+    week52High: m['52WeekHigh'] || null,
+    week52Low: m['52WeekLow'] || null,
+  };
+}
+
+// ── MASSIVE HELPERS ───────────────────────────────────────────────
+async function massiveGet(path) {
+  if (!MASSIVE_KEY) return null;
+  try {
+    const r = await fetch(`${MASSIVE_BASE}${path}`, {
+      headers: { 'Authorization': 'Bearer ' + MASSIVE_KEY, 'Content-Type': 'application/json' }
+    });
+    if (!r.ok) return null;
+    return r.json();
+  } catch(e) { return null; }
+}
+
+// Get real-time quote from Massive (fallback to Alpaca if unavailable)
+async function getRealTimeQuote(ticker) {
+  if (MASSIVE_KEY) {
+    const data = await massiveGet(`/quotes/${ticker}`);
+    if (data && data.price) return { price: data.price, change: data.change, changePct: data.changePct, volume: data.volume };
+  }
+  // Fallback to Alpaca data
+  const price = await getLivePrice(ticker);
+  return price ? { price, change: null, changePct: null, volume: null } : null;
+}
+
 async function initFromDB() {
   if (!DB) { console.log('[AGENT] Supabase not configured — running in-memory only'); return; }
   try {
     console.log('[AGENT] Restoring state from Supabase...');
- 
+
     const dnaRows = await dbSelect('trade_dna','order=created_at.asc&limit=200');
     if (Array.isArray(dnaRows) && dnaRows.length) {
       tradeDNA = dnaRows.map(r=>({ticker:r.ticker,entryPrice:r.entry_price,exitPrice:r.exit_price,returnPct:r.return_pct,profitable:r.profitable,catalyst:r.catalyst,signalScore:r.signal_score,reason:r.reason,date:r.created_at}));
       console.log('[AGENT] Restored '+tradeDNA.length+' trade DNA records');
     }
- 
+
     const sigRows = await dbSelect('active_signals','order=updated_at.desc&limit=20');
     if (Array.isArray(sigRows) && sigRows.length) {
       sigRows.forEach(r=>{
@@ -125,13 +274,13 @@ async function initFromDB() {
       });
       console.log('[AGENT] Restored '+sigRows.length+' signals');
     }
- 
+
     const qRows = await dbSelect('pending_queue','order=created_at.asc');
     if (Array.isArray(qRows) && qRows.length) {
       pendingQueue = qRows.map(r=>({ticker:r.ticker,signal:r.signal,dollars:r.dollars,signalScore:r.signal_score,confidence:r.confidence,catalyst:r.catalyst,thesis:r.thesis,queuedAt:r.queued_at,isCrypto:r.is_crypto}));
       console.log('[AGENT] Restored '+pendingQueue.length+' queued orders');
     }
- 
+
     const logRows = await dbSelect('decision_log','order=created_at.desc&limit=100');
     if (Array.isArray(logRows) && logRows.length) {
       const restored = logRows.map(r=>({timestamp:r.created_at,type:r.type,message:r.message,ticker:r.ticker,signalScore:r.signal_score,confidence:r.confidence,dollars:r.dollars,pnlPct:r.pnl_pct,catalyst:r.catalyst,thesis:r.thesis,agentVotes:r.agent_votes,factorBreakdown:r.factor_breakdown,riskScore:r.risk_score}));
@@ -139,17 +288,17 @@ async function initFromDB() {
       if (decisionLog.length>500) decisionLog.length=500;
       console.log('[AGENT] Restored '+logRows.length+' log entries');
     }
- 
+
     const infRows = await dbSelect('influencer_alerts','order=created_at.desc&limit=50');
     if (Array.isArray(infRows) && infRows.length) {
       influencerAlerts = infRows.map(r=>({person:r.person,platform:r.platform,action:r.action,relatedTickers:r.related_tickers,estimatedImpact:r.estimated_impact,confidence:r.confidence,sentiment:r.sentiment,urgency:r.urgency,tradingImplication:r.trading_implication,foundAt:r.created_at}));
       console.log('[AGENT] Restored '+influencerAlerts.length+' influencer alerts');
     }
- 
+
     console.log('[AGENT] Database restore complete');
   } catch(e) { console.error('[AGENT] DB restore failed:', e.message); }
 }
- 
+
 // ── LOG ───────────────────────────────────────────────────────────
 function log(type, message, data) {
   const entry = { timestamp:new Date().toISOString(), type, message, ...(data||{}) };
@@ -161,7 +310,7 @@ function log(type, message, data) {
     dbInsert('decision_log',{type,message,ticker:data?.ticker||null,signal_score:data?.signalScore||null,confidence:data?.confidence||null,dollars:data?.dollars||null,pnl_pct:data?.pnlPct||null,catalyst:data?.catalyst||null,thesis:data?.thesis||null,agent_votes:data?.agentVotes?JSON.stringify(data.agentVotes):null,factor_breakdown:data?.factorBreakdown?JSON.stringify(data.factorBreakdown):null,risk_score:data?.riskScore||null,is_crypto:data?.isCrypto||false}).catch(()=>{});
   }
 }
- 
+
 // ── ALERTS ────────────────────────────────────────────────────────
 async function sendAlert(type, message, data) {
   const emoji={TRADE:'💰',RISK:'🛑',PROFIT:'🎯',INFLUENCER:'⚡'}[type]||'📊';
@@ -184,7 +333,7 @@ async function sendAlert(type, message, data) {
     } catch(e){}
   }
 }
- 
+
 // ── ALPACA ────────────────────────────────────────────────────────
 async function alpaca(path, opts) {
   opts=opts||{};
@@ -207,7 +356,7 @@ async function getLivePrice(ticker) {
 async function isShortable(ticker) {
   try{const a=await alpaca('/v2/assets/'+ticker);return a.shortable&&a.easy_to_borrow;}catch(e){return false;}
 }
- 
+
 // ── CLAUDE ────────────────────────────────────────────────────────
 async function callClaude(systemPrompt, userContent, maxTokens, useWebSearch) {
   maxTokens=maxTokens||700;
@@ -223,7 +372,7 @@ async function callClaude(systemPrompt, userContent, maxTokens, useWebSearch) {
   if(!match) throw new Error('No JSON: '+text.substring(0,100));
   return JSON.parse(match[0]);
 }
- 
+
 // ── RISK ENGINE ───────────────────────────────────────────────────
 function scoreRisk(signal) {
   let risk=0;
@@ -242,7 +391,7 @@ function scoreRisk(signal) {
   return Math.min(100,Math.max(0,risk));
 }
 function getRiskLabel(s){return s>=70?'HIGH RISK':s>=45?'MEDIUM RISK':'LOW RISK';}
- 
+
 // ── WATCHLISTS ────────────────────────────────────────────────────
 function categoriseSignal(signal) {
   const catalyst=(signal.catalyst||'').toLowerCase(),detail=(signal.detail||'').toLowerCase();
@@ -261,7 +410,7 @@ function updateWatchlists(signal) {
   watchlists[cat].unshift({ticker,signal:signal.signal,signalScore:signal.signalScore,catalyst:signal.catalyst,riskScore:signal.riskScore,addedAt:new Date().toISOString()});
   Object.keys(watchlists).forEach(k=>{if(watchlists[k].length>10)watchlists[k]=watchlists[k].slice(0,10);});
 }
- 
+
 // ── TRADE DNA ─────────────────────────────────────────────────────
 function recordTradeOutcome(ticker, entryPrice, exitPrice, catalyst, signalScore, reason) {
   const returnPct=entryPrice>0?((exitPrice-entryPrice)/entryPrice)*100:0;
@@ -271,7 +420,7 @@ function recordTradeOutcome(ticker, entryPrice, exitPrice, catalyst, signalScore
   log('DNA','📊 Trade recorded: '+ticker+' '+returnPct.toFixed(1)+'% ['+reason+']',{ticker,returnPct,profitable:returnPct>0});
   dbInsert('trade_dna',{ticker,entry_price:entryPrice,exit_price:exitPrice,return_pct:record.returnPct,profitable:record.profitable,catalyst,signal_score:signalScore,reason}).catch(()=>{});
 }
- 
+
 function getTradeDNASummary() {
   if(tradeDNA.length<3) return 'Building trade history...';
   const wins=tradeDNA.filter(t=>t.profitable).length;
@@ -282,7 +431,7 @@ function getTradeDNASummary() {
   const top=Object.entries(bestCat).sort((a,b)=>b[1].wins-a[1].wins)[0];
   return `Win rate: ${winRate}% (${wins}/${tradeDNA.length} trades). Avg return: ${avgReturn}%. Best: ${top?top[0]:'unknown'}.`;
 }
- 
+
 // ── MULTI-AGENT ANALYST ───────────────────────────────────────────
 async function runMultiAgentAnalysis(signal) {
   const ticker=signal.ticker||signal.symbol;
@@ -307,7 +456,7 @@ async function runMultiAgentAnalysis(signal) {
   }));
   return votes;
 }
- 
+
 // ── CONVICTION ENGINE ─────────────────────────────────────────────
 function buildConviction(signal, agentVotes) {
   const isShort=signal.signal==='SHORT'||signal.type==='SHORT';
@@ -326,7 +475,7 @@ function buildConviction(signal, agentVotes) {
   const riskReward=downside>0?(upside/downside).toFixed(1)+':1':'—';
   return {probability,expectedReturn,worstCase,riskReward,agentConsensus:Math.round(consensus),buyVotes:buyCount,sellVotes:sellCount,holdVotes:total-buyCount-sellCount,agentVoteSummary:buyCount+'/'+total+' agents '+(isShort?'bearish':'bullish'),dnaSummary:getTradeDNASummary(),agentVotes};
 }
- 
+
 // ── POSITION SIZING ───────────────────────────────────────────────
 function positionDollars(portfolio, score, confidence) {
   const c=score*0.6+confidence*0.4;
@@ -336,7 +485,7 @@ function positionDollars(portfolio, score, confidence) {
   if(c>=65) return portfolio*0.02;
   return 0;
 }
- 
+
 // ── PLACE ORDER ───────────────────────────────────────────────────
 async function placeOrder(ticker, dollars, side, analysis, isCrypto) {
   try{
@@ -357,7 +506,7 @@ async function placeOrder(ticker, dollars, side, analysis, isCrypto) {
     return order;
   }catch(e){log('ERROR','Order failed '+ticker+': '+e.message);return null;}
 }
- 
+
 // ── SMART SELL EVALUATION ─────────────────────────────────────────
 async function shouldSell(ticker, pnlPct, entry, current, isCrypto) {
   const lastEval=sellEvalCache[ticker];
@@ -377,7 +526,7 @@ async function shouldSell(ticker, pnlPct, entry, current, isCrypto) {
   }catch(e){log('ERROR','Sell eval failed: '+e.message);}
   return true;
 }
- 
+
 // ── MANAGE POSITIONS ──────────────────────────────────────────────
 async function managePositions(positions) {
   if(!positions) positions=await alpaca('/v2/positions');
@@ -408,7 +557,7 @@ async function managePositions(positions) {
     }
   }
 }
- 
+
 // ── EXECUTE PENDING QUEUE ─────────────────────────────────────────
 async function executePendingQueue(portfolio, buyingPower, positions) {
   if(!pendingQueue.length) return buyingPower;
@@ -427,7 +576,7 @@ async function executePendingQueue(portfolio, buyingPower, positions) {
   }
   return buyingPower;
 }
- 
+
 // ── MORNING BRIEFING ──────────────────────────────────────────────
 async function runMorningBriefing() {
   state.status='MORNING_BRIEFING';state.lastIntel=new Date().toISOString();
@@ -446,7 +595,7 @@ Keep all strings under 100 chars. Return ONLY JSON.`;
   }catch(e){log('ERROR','Morning briefing failed: '+e.message);}
   state.status='IDLE';
 }
- 
+
 async function runPreCloseBriefing() {
   state.status='INTEL_SCAN';state.lastIntel=new Date().toISOString();
   log('INTEL','🔔 Running pre-close briefing...');
@@ -463,7 +612,7 @@ Max 3 events. Return ONLY JSON.`;
   }catch(e){log('ERROR','Pre-close briefing failed: '+e.message);}
   state.status='IDLE';
 }
- 
+
 // ── INFLUENCER SCAN ───────────────────────────────────────────────
 async function runInfluencerScan() {
   state.status='INFLUENCER_SCAN';state.lastInfluencer=new Date().toISOString();
@@ -502,7 +651,7 @@ Return ONLY JSON.`;
   }catch(e){log('ERROR','Influencer scan failed: '+e.message);}
   state.status='IDLE';
 }
- 
+
 // ── CATALYST SCAN ─────────────────────────────────────────────────
 async function runCatalystScan() {
   state.status='CATALYST_SCAN';state.lastCatalyst=new Date().toISOString();
@@ -523,6 +672,8 @@ Return ONLY JSON.`;
       const agentVotes=await runMultiAgentAnalysis(signal);
       const conviction=buildConviction(signal,agentVotes);
       signal.conviction=conviction;
+      // Enrich with real Finnhub data before storing
+      signal = await enrichSignalWithRealData(signal);
       const existing=catalystSignals.findIndex(s=>s.ticker===signal.ticker);
       if(existing>=0)catalystSignals[existing]=signal;else catalystSignals.push(signal);
       updateWatchlists(signal);
@@ -537,7 +688,7 @@ Return ONLY JSON.`;
   }catch(e){log('ERROR','Catalyst scan failed: '+e.message);}
   state.status='IDLE';
 }
- 
+
 // ── CRYPTO SCAN ───────────────────────────────────────────────────
 async function runCryptoScan() {
   state.status='CRYPTO_SCAN';state.lastCrypto=new Date().toISOString();
@@ -564,7 +715,7 @@ Return ONLY JSON.`;
   }catch(e){log('ERROR','Crypto scan failed: '+e.message);}
   state.status='IDLE';
 }
- 
+
 // ── TRADE CHECK ───────────────────────────────────────────────────
 async function runTradeCheck() {
   state.lastTradeCheck=new Date().toISOString();state.status='TRADE_CHECK';
@@ -624,7 +775,169 @@ async function runTradeCheck() {
   }catch(e){log('ERROR','Trade check failed: '+e.message);}
   state.status='IDLE';
 }
- 
+
+// ── EARNINGS PRE-POSITIONING SCAN ────────────────────────────────
+// Runs at 6pm ET — finds tomorrow's earnings, builds thesis overnight,
+// queues trades ready for market open. Uses REAL Finnhub data.
+async function runEarningsPrePositioning() {
+  state.status = 'EARNINGS_SCAN';
+  log('CATALYST', '📅 Running earnings pre-positioning scan — finding tomorrows catalysts...');
+
+  try {
+    const upcoming = await getUpcomingEarnings(2);
+    if (!upcoming.length) {
+      log('CATALYST', '📅 No earnings found for next 2 days');
+      state.status = 'IDLE';
+      return;
+    }
+
+    log('CATALYST', '📅 Found '+upcoming.length+' upcoming earnings — ' + upcoming.map(e=>e.ticker).join(', '));
+
+    // Analyse top 3 most significant upcoming earnings
+    const toAnalyse = upcoming.slice(0, 3);
+
+    for (const earning of toAnalyse) {
+      try {
+        const ticker = earning.ticker;
+
+        // Get real data from Finnhub
+        const [ratings, insider, metrics, news] = await Promise.all([
+          getAnalystRatings(ticker),
+          getInsiderActivity(ticker),
+          getMetrics(ticker),
+          getCompanyNews(ticker),
+        ]);
+
+        // Build context from real data
+        const analystContext = ratings
+          ? `Analyst consensus: ${ratings.consensus} (${ratings.bullishPct}% bullish, ${ratings.buy+ratings.strongBuy} buys vs ${ratings.sell+ratings.strongSell} sells)`
+          : 'No analyst data';
+        const insiderContext = insider
+          ? `Insider activity: ${insider.netActivity} (${insider.recentBuys} buys, ${insider.recentSells} sells in recent filings)`
+          : 'No insider data';
+        const metricsContext = metrics
+          ? `P/E: ${metrics.pe||'N/A'}, Revenue growth: ${metrics.revenueGrowth?metrics.revenueGrowth.toFixed(1)+'%':'N/A'}, Beta: ${metrics.beta||'N/A'}`
+          : 'No metrics data';
+        const newsContext = news.length
+          ? 'Recent headlines: ' + news.slice(0,2).map(n=>n.headline).join(' | ')
+          : 'No recent news';
+
+        const prompt = `You are an earnings pre-positioning analyst. ${ticker} reports earnings ${earning.time==='bmo'?'before market open':'after market close'} on ${earning.date}.
+EPS estimate: $${earning.epsEstimate}${earning.revenueEstimate?' Revenue estimate: $'+Math.round(earning.revenueEstimate/1e6)+'M':''}
+${analystContext}
+${insiderContext}
+${metricsContext}
+${newsContext}
+Based on this data, should we pre-position LONG (expecting beat), SHORT (expecting miss), or AVOID?
+Consider: analyst sentiment, insider activity, recent news tone, valuation.
+Return ONLY JSON:
+{"ticker":"${ticker}","action":"LONG","signal":"BUY","signalScore":78,"confidence":72,"thesis":"Why we expect a beat or miss in one sentence","entryTiming":"Pre-market or at open","targetPrice":0,"stopLoss":0,"expectedReturn":"+8%","riskFactors":["risk1","risk2"],"keyMetricToWatch":"What EPS number would confirm the thesis"}
+action: LONG, SHORT, or AVOID. Return ONLY JSON.`;
+
+        const analysis = await callClaude(prompt, 'Pre-position analysis for '+ticker+' earnings on '+earning.date, 600, false);
+
+        if (analysis.action === 'AVOID') {
+          log('CATALYST', '⏭ AVOID pre-positioning for '+ticker+' — '+analysis.thesis, {ticker});
+          continue;
+        }
+
+        // Add real analyst + insider data to signal
+        analysis.catalyst = 'Earnings '+earning.date+' (est EPS $'+earning.epsEstimate+')';
+        analysis.detail = analystContext+'. '+insiderContext;
+        analysis.epsEstimate = earning.epsEstimate;
+        analysis.reportDate = earning.date;
+        analysis.reportTime = earning.time;
+        analysis.analystRatings = ratings;
+        analysis.insiderActivity = insider;
+        analysis.riskScore = scoreRisk(analysis);
+        analysis.riskLabel = getRiskLabel(analysis.riskScore);
+        analysis.foundAt = new Date().toISOString();
+        analysis.isEarningsPlay = true;
+        analysis.type = analysis.action;
+
+        if (analysis.riskScore >= 70) {
+          log('RISK', '🛡️ Earnings signal for '+ticker+' blocked — risk score '+analysis.riskScore, {ticker, riskScore: analysis.riskScore});
+          continue;
+        }
+
+        // Store as catalyst signal — will execute at next trade check when market opens
+        const existing = catalystSignals.findIndex(s => s.ticker === ticker);
+        if (existing >= 0) catalystSignals[existing] = analysis;
+        else catalystSignals.push(analysis);
+        updateWatchlists(analysis);
+
+        dbUpsert('active_signals', {ticker, signal:analysis.signal, type:analysis.type, signal_score:analysis.signalScore, confidence:analysis.confidence, catalyst:analysis.catalyst, detail:analysis.detail, thesis:analysis.thesis, target_price:analysis.targetPrice||null, stop_loss:analysis.stopLoss||null, expected_return:analysis.expectedReturn, risk_score:analysis.riskScore, is_crypto:false, found_at:analysis.foundAt, updated_at:new Date().toISOString()}).catch(()=>{});
+
+        // Save to earnings_calendar table
+        dbInsert('earnings_calendar', {ticker, report_date:earning.date, report_time:earning.time, eps_estimate:earning.epsEstimate, revenue_estimate:earning.revenueEstimate||null}).catch(()=>{});
+
+        const emoji = analysis.action === 'LONG' ? '🔺' : '🔻';
+        log('CATALYST', emoji+' EARNINGS PRE-POSITION: '+ticker+' ['+analysis.action+'] Report: '+earning.date+' ('+earning.time+') | '+analysis.thesis, {
+          ticker, signal:analysis.signal, signalScore:analysis.signalScore, confidence:analysis.confidence,
+          thesis:analysis.thesis, catalyst:analysis.catalyst, epsEstimate:earning.epsEstimate,
+          analystConsensus: ratings?.consensus, insiderActivity: insider?.netActivity,
+          riskScore: analysis.riskScore,
+        });
+
+        await new Promise(r => setTimeout(r, 3000));
+      } catch(e) { log('ERROR', 'Earnings analysis failed for '+earning.ticker+': '+e.message); }
+    }
+
+    log('CATALYST', '✅ Earnings pre-positioning complete — signals queued for market open');
+  } catch(e) { log('ERROR', 'Earnings scan failed: '+e.message); }
+  state.status = 'IDLE';
+}
+
+// ── REAL DATA ENHANCED CATALYST SCAN ─────────────────────────────
+// Runs alongside the main catalyst scan but enriches with Finnhub real data
+async function enrichSignalWithRealData(signal) {
+  if (!FINNHUB_KEY || !signal.ticker) return signal;
+  try {
+    const [eps, ratings, insider] = await Promise.all([
+      getEPSSurprise(signal.ticker),
+      getAnalystRatings(signal.ticker),
+      getInsiderActivity(signal.ticker),
+    ]);
+
+    if (eps) {
+      signal.realEPS = eps;
+      // Boost score if real EPS confirms the signal direction
+      if (signal.signal === 'BUY' && eps.strongBeat) {
+        signal.signalScore = Math.min(99, (signal.signalScore||70) + 8);
+        signal.detail = (signal.detail||'') + ` Real EPS: $${eps.epsActual} vs est $${eps.epsEstimate} (${eps.surprisePct>0?'+':''}${eps.surprisePct}%).`;
+      } else if (signal.signal === 'SHORT' && eps.strongMiss) {
+        signal.signalScore = Math.min(99, (signal.signalScore||70) + 8);
+        signal.detail = (signal.detail||'') + ` Real EPS: $${eps.epsActual} vs est $${eps.epsEstimate} (${eps.surprisePct}% miss).`;
+      }
+    }
+
+    if (ratings) {
+      signal.analystRatings = ratings;
+      // Boost confidence if analyst consensus matches signal
+      if (signal.signal === 'BUY' && ratings.consensus === 'BUY') {
+        signal.confidence = Math.min(99, (signal.confidence||70) + 5);
+      } else if (signal.signal === 'SHORT' && ratings.consensus === 'SELL') {
+        signal.confidence = Math.min(99, (signal.confidence||70) + 5);
+      }
+    }
+
+    if (insider) {
+      signal.insiderActivity = insider;
+      if (signal.signal === 'BUY' && insider.netActivity === 'NET_BUYING') {
+        signal.signalScore = Math.min(99, (signal.signalScore||70) + 5);
+      }
+    }
+
+    // Recalculate risk with enriched data
+    signal.riskScore = scoreRisk(signal);
+    signal.riskLabel = getRiskLabel(signal.riskScore);
+    signal.dataEnriched = true;
+
+    log('CATALYST', '📊 Enriched '+signal.ticker+' with real data: EPS '+(eps?eps.surprisePct+'%':'N/A')+' | Analyst: '+(ratings?.consensus||'N/A')+' | Insider: '+(insider?.netActivity||'N/A'), {ticker:signal.ticker});
+  } catch(e) { log('ERROR', 'Signal enrichment failed for '+signal.ticker+': '+e.message); }
+  return signal;
+}
+
 // ── SCHEDULER ─────────────────────────────────────────────────────
 function getETTime() {
   const et=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
@@ -633,12 +946,13 @@ function getETTime() {
   return{hhmm,isMarket:day>=1&&day<=5&&total>=9*60+30&&total<=16*60};
 }
 function minsSince(iso){return iso?(Date.now()-new Date(iso).getTime())/60000:9999;}
- 
+
 async function scheduler() {
   if(!['IDLE','MARKET_CLOSED'].includes(state.status)) return;
   const{hhmm,isMarket}=getETTime();
   if(hhmm==='09:00'){await runMorningBriefing();return;}
   if(hhmm==='15:30'){await runPreCloseBriefing();return;}
+  if(hhmm==='18:00'){await runEarningsPrePositioning();return;}
   if(minsSince(state.lastCrypto)>=CRYPTO_INTERVAL){await runCryptoScan();return;}
   if(minsSince(state.lastInfluencer)>=INFLUENCER_INTERVAL){await runInfluencerScan();return;}
   if(isMarket){
@@ -650,10 +964,10 @@ async function scheduler() {
     if(cryptoSignals.length>0&&minsSince(state.lastTradeCheck)>=TRADE_CHECK_MINS) await runTradeCheck();
   }
 }
- 
+
 setInterval(scheduler,5*60*1000);
 log('AGENT','🤖 Agent v4 — Morning briefing | Multi-agent | Conviction | Trade DNA | Supabase memory');
- 
+
 // ── ROUTES ────────────────────────────────────────────────────────
 app.use('/alpaca',async(req,res)=>{
   const base=req.headers['x-alpaca-mode']==='live'?'https://api.alpaca.markets':ALPACA_BASE;
@@ -670,13 +984,15 @@ app.get('/briefing',(req,res)=>res.json(morningBriefing||{message:'No briefing y
 app.get('/tradedna',(req,res)=>res.json({summary:getTradeDNASummary(),trades:tradeDNA.slice(-50),totalTrades:tradeDNA.length,winRate:tradeDNA.length>0?Math.round(tradeDNA.filter(t=>t.profitable).length/tradeDNA.length*100):0}));
 app.get('/health',(req,res)=>res.json({ok:true,uptime:process.uptime(),dbConnected:!!DB}));
 app.post('/scan-now',(req,res)=>{res.json({message:'Catalyst scan triggered'});runCatalystScan();});
+app.post('/earnings-now',(req,res)=>{res.json({message:'Earnings scan triggered'});runEarningsPrePositioning();});
+app.get('/earnings',(req,res)=>dbSelect('earnings_calendar','order=report_date.asc&limit=20').then(d=>res.json(d||[])).catch(()=>res.json([])));
 app.post('/crypto-now',(req,res)=>{res.json({message:'Crypto scan triggered'});runCryptoScan();});
 app.post('/intel-now',(req,res)=>{res.json({message:'Morning briefing triggered'});runMorningBriefing();});
 app.post('/influencer-now',(req,res)=>{res.json({message:'Influencer scan triggered'});runInfluencerScan();});
 app.post('/trade-now',(req,res)=>{res.json({message:'Trade check triggered'});runTradeCheck();});
 app.post('/clear-queue',(req,res)=>{const n=pendingQueue.length;pendingQueue=[];dbDelete('pending_queue','ticker=neq.null').catch(()=>{});log('AGENT','🗑 Queue cleared ('+n+' removed)');res.json({cleared:n});});
 app.use(express.static(__dirname));
- 
+
 app.listen(3001,()=>{
   log('AGENT','🤖 Market Intelligence Agent v4 running on port 3001');
   initFromDB().then(()=>{
@@ -689,4 +1005,3 @@ app.listen(3001,()=>{
     setTimeout(runCatalystScan,100000);
   });
 });
- 

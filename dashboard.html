@@ -166,6 +166,9 @@ body { background: #f5f5f7; color: #1d1d1f; font-family: -apple-system, BlinkMac
 .queue-row:last-child { border-bottom:none; }
 
 .empty { text-align:center; padding:32px 0; color:#c7c7cc; font-size:13px; }
+.real-data-badge { display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:700;background:#d1f5e0;color:#1a7f37;padding:2px 7px;border-radius:3px;letter-spacing:0.5px; }
+.earnings-row { padding:14px 0; border-bottom:1px solid #f5f5f7; }
+.earnings-row:last-child { border-bottom:none; }
 
 @media (min-width:768px) {
   .page { padding:22px 28px; }
@@ -199,6 +202,7 @@ body { background: #f5f5f7; color: #1d1d1f; font-family: -apple-system, BlinkMac
     <button class="btn btn-ghost" onclick="loadAll()">↻</button>
     <button class="btn btn-purple" onclick="triggerInfluencer()">⚡</button>
     <button class="btn btn-amber" onclick="triggerCrypto()">₿</button>
+    <button class="btn btn-ghost" onclick="triggerEarnings()" style="background:rgba(52,199,89,0.1);color:#34c759;border:1px solid rgba(52,199,89,0.2)">📅</button>
     <button class="btn btn-primary" id="scan-btn" onclick="triggerScan()">Scan</button>
   </div>
 </div>
@@ -223,6 +227,7 @@ body { background: #f5f5f7; color: #1d1d1f; font-family: -apple-system, BlinkMac
   <div class="tabs">
     <button class="tab active" onclick="switchTab('log',this)">Activity</button>
     <button class="tab" onclick="switchTab('signals',this)">Signals</button>
+    <button class="tab" onclick="switchTab('earnings',this)">📅 Earnings</button>
     <button class="tab" onclick="switchTab('influencers',this)">⚡ Intel</button>
     <button class="tab" onclick="switchTab('watchlists',this)">Watch</button>
     <button class="tab" onclick="switchTab('positions',this)">Holdings</button>
@@ -248,6 +253,7 @@ body { background: #f5f5f7; color: #1d1d1f; font-family: -apple-system, BlinkMac
       <div class="card">
         <div class="card-title">Schedule</div>
         <div class="agent-row"><span class="agent-label">Morning briefing</span><span class="agent-value" style="font-size:10px">9:00am ET</span></div>
+        <div class="agent-row"><span class="agent-label">Earnings pre-position</span><span class="agent-value" style="font-size:10px">6:00pm ET</span></div>
         <div class="agent-row"><span class="agent-label">Pre-close</span><span class="agent-value" style="font-size:10px">3:30pm ET</span></div>
         <div class="agent-row"><span class="agent-label">Catalyst + 5 agents</span><span class="agent-value" style="font-size:10px">Every 2hrs</span></div>
         <div class="agent-row"><span class="agent-label">Crypto scan</span><span class="agent-value" style="font-size:10px">Every 4hrs 24/7</span></div>
@@ -297,6 +303,20 @@ body { background: #f5f5f7; color: #1d1d1f; font-family: -apple-system, BlinkMac
             <span id="signals-count-badge" style="font-size:11px;color:#6e6e73">0 signals</span>
           </div>
           <div id="signals-list"><div class="empty">No active signals</div></div>
+        </div>
+      </div>
+
+      <!-- EARNINGS CALENDAR -->
+      <div class="panel" id="panel-earnings">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div style="font-size:16px;font-weight:700;letter-spacing:-0.3px">Earnings Calendar</div>
+              <div style="font-size:11px;color:#6e6e73;margin-top:2px">Upcoming reports with pre-positioning signals</div>
+            </div>
+            <button class="btn" onclick="triggerEarnings()" style="font-size:11px;background:rgba(52,199,89,0.1);color:#34c759;border:1px solid rgba(52,199,89,0.2)">Pre-Position Now</button>
+          </div>
+          <div id="earnings-list"><div class="empty">No upcoming earnings data. Tap "Pre-Position Now" to scan.</div></div>
         </div>
       </div>
 
@@ -593,6 +613,8 @@ async function loadSignals() {
           <div>
             <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
               <span style="font-size:16px;font-weight:800">${ticker}</span>
+              ${s.dataEnriched?'<span class="real-data-badge">📊 REAL DATA</span>':''}
+              ${s.isEarningsPlay?'<span style="font-size:9px;font-weight:700;background:#e0f2fe;color:#0369a1;padding:2px 7px;border-radius:3px">📅 EARNINGS PLAY</span>':''}
               <span style="font-size:10px;font-weight:700;color:${typeColor};background:${typeColor}18;padding:2px 8px;border-radius:4px">${typeLabel}</span>
               <span class="risk-badge ${riskClass(risk)}">${riskLabel(risk)}</span>
             </div>
@@ -609,6 +631,9 @@ async function loadSignals() {
         ${factorHTML}
         ${votesHTML}
         ${s.entryLogic?`<div style="font-size:11px;color:#0071e3;margin-top:8px;font-style:italic">💡 ${s.entryLogic}</div>`:''}
+        ${s.realEPS?`<div style="font-size:11px;background:#f0fdf4;border-radius:6px;padding:6px 8px;margin-top:6px"><span style="font-weight:700;color:#1a7f37">📊 Real EPS:</span> $${s.realEPS.epsActual} vs est $${s.realEPS.epsEstimate} <span style="color:${s.realEPS.surprisePct>0?'#34c759':'#ff3b30'};font-weight:700">(${s.realEPS.surprisePct>0?'+':''}${s.realEPS.surprisePct}%)</span></div>`:''}
+        ${s.analystRatings?`<div style="font-size:11px;color:#6e6e73;margin-top:4px">Analyst consensus: <b style="color:${s.analystRatings.consensus==='BUY'?'#34c759':s.analystRatings.consensus==='SELL'?'#ff3b30':'#ff9500'}">${s.analystRatings.consensus}</b> — ${s.analystRatings.bullishPct}% bullish (${s.analystRatings.buy+s.analystRatings.strongBuy} buys vs ${s.analystRatings.sell+s.analystRatings.strongSell} sells)</div>`:''}
+        ${s.insiderActivity?`<div style="font-size:11px;color:#6e6e73;margin-top:2px">Insider activity: <b>${s.insiderActivity.netActivity?.replace(/_/g,' ')}</b> (${s.insiderActivity.recentBuys} buys, ${s.insiderActivity.recentSells} sells)</div>`:''}
         ${s.thesis?`<div style="font-size:11px;color:#6e6e73;margin-top:4px">${s.thesis}</div>`:''}
         <div style="font-size:10px;color:#c7c7cc;margin-top:6px">Target: $${s.targetPrice} · Stop: $${s.stopLoss} · ${s.timeframe||''} · Found ${timeAgo(s.foundAt)}</div>
       </div>`;
@@ -707,6 +732,48 @@ async function loadPending() {
 }
 
 // ── ACTIONS ───────────────────────────────────────────────────────
+async function triggerEarnings() {
+  try {
+    await fetch(`${BASE}/earnings-now`, {method:'POST'});
+    setTimeout(loadAll, 10000);
+    setTimeout(loadAll, 25000);
+  } catch(e){}
+}
+
+async function loadEarnings() {
+  try {
+    const items = await fetch(`${BASE}/earnings`).then(r=>r.json());
+    const el = document.getElementById('earnings-list');
+    if(!items||!items.length){
+      if(el)el.innerHTML='<div class="empty">No upcoming earnings in database yet.<br><br>Tap "Pre-Position Now" to scan Finnhub for upcoming earnings reports.</div>';
+      return;
+    }
+    if(el) el.innerHTML = items.map(e => {
+      const timeLabel = e.report_time==='bmo'?'Before Open':e.report_time==='amc'?'After Close':'During Market';
+      const hasActual = e.eps_actual !== null && e.eps_actual !== undefined;
+      const surprise = hasActual && e.eps_estimate ? ((e.eps_actual-e.eps_estimate)/Math.abs(e.eps_estimate)*100) : null;
+      const col = surprise===null?'#6e6e73':surprise>0?'#34c759':'#ff3b30';
+      return `<div class="earnings-row">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div>
+            <div style="display:flex;align-items:center;gap:7px;margin-bottom:3px">
+              <span style="font-size:15px;font-weight:800">${e.ticker}</span>
+              <span style="font-size:10px;color:#6e6e73;background:#f5f5f7;padding:2px 7px;border-radius:4px">${timeLabel}</span>
+              <span class="real-data-badge">📊 FINNHUB</span>
+            </div>
+            <div style="font-size:11px;color:#6e6e73">${e.report_date} ${e.company_name?'· '+e.company_name:''}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:12px;color:#6e6e73">EPS est: <b>$${e.eps_estimate||'—'}</b></div>
+            ${hasActual?`<div style="font-size:12px;font-weight:700;color:${col}">Actual: $${e.eps_actual} (${surprise>0?'+':''}${surprise?.toFixed(1)}%)</div>`:''}
+            ${e.revenue_estimate?`<div style="font-size:11px;color:#6e6e73">Rev est: $${Math.round(e.revenue_estimate/1e6)}M</div>`:''}
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e){}
+}
+
 async function triggerScan() {
   const btn=document.getElementById('scan-btn');
   btn.textContent='Scanning...';btn.disabled=true;
@@ -725,7 +792,7 @@ async function clearQueue() {
 }
 
 async function loadAll() {
-  await Promise.all([loadAccount(),loadPositions(),loadStatus(),loadLog(),loadSignals(),loadInfluencers(),loadWatchlists(),loadPending(),loadDNA(),loadBriefing()]);
+  await Promise.all([loadAccount(),loadPositions(),loadStatus(),loadLog(),loadSignals(),loadInfluencers(),loadWatchlists(),loadPending(),loadDNA(),loadBriefing(),loadEarnings()]);
 }
 
 loadAll();
