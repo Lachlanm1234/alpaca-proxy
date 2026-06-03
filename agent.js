@@ -618,13 +618,12 @@ async function runInfluencerScan() {
   state.status='INFLUENCER_SCAN';state.lastInfluencer=new Date().toISOString();
   log('INFLUENCER','⚡ Scanning Musk, Trump, Powell, Wood, Pelosi, Burry, Buffett...');
   const names=INFLUENCERS.map(i=>i.name).join(', ');
-  const prompt=`You must respond with ONLY a JSON object. No explanation, no preamble, no text before or after.
-Search for recent statements from: ${names} that could move markets.
-Your entire response must be exactly this format:
-{"influencerActivity":[{"person":"Elon Musk","platform":"X","action":"Posted about AI","relatedTickers":["NVDA"],"relatedSectors":["AI"],"estimatedImpact":"+2%","impactLagHours":2,"confidence":75,"sentiment":"BULLISH","urgency":"MEDIUM","tradingImplication":"NVDA benefits"}]}
-If nothing found, respond with exactly: {"influencerActivity":[]}`;
+  const prompt=`Respond with ONLY JSON. Find the single most important market-moving statement from: ${names} in last 24 hours.
+Respond with exactly: {"influencerActivity":[{"person":"Name","platform":"X","action":"Action under 50 chars","relatedTickers":["TICK"],"relatedSectors":["Sector"],"estimatedImpact":"+2%","impactLagHours":2,"confidence":75,"sentiment":"BULLISH","urgency":"MEDIUM","tradingImplication":"Implication under 50 chars"}]}
+If nothing found: {"influencerActivity":[]}
+ONE item maximum. All strings under 60 characters.`;
   try{
-    const result=await callClaude(prompt,'Did Musk Trump Powell Wood Pelosi Burry or Buffett say anything market-moving in last 24 hours?',600,true);
+    const result=await callClaude(prompt,'Most important market statement from Musk Trump Powell Wood Pelosi Burry Buffett today?',500,true);
     const activities=result.influencerActivity||[];
     activities.forEach(activity=>{
       const known=INFLUENCERS.find(i=>i.name===activity.person);
