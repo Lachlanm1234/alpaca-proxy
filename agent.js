@@ -693,13 +693,13 @@ Return ONLY JSON.`;
 async function runCryptoScan() {
   state.status='CRYPTO_SCAN';state.lastCrypto=new Date().toISOString();
   log('CRYPTO','₿ Running crypto scan...');
-  const prompt=`Search crypto markets for the best trade right now. Pick ONE of: BTC/USD, ETH/USD, SOL/USD, AVAX/USD, LINK/USD, DOGE/USD.
-Return this exact JSON with real current data:
-{"cryptoSignals":[{"symbol":"BTC/USD","name":"Bitcoin","signal":"BUY","signalScore":80,"confidence":74,"currentPrice":68500,"catalyst":"Short catalyst under 60 chars","detail":"Short detail under 80 chars","entryLogic":"Entry logic","targetPrice":75000,"stopLoss":64000,"expectedReturn":"+9%","timeframe":"3-7 days","thesis":"Short thesis","factorBreakdown":{"technicalFactor":78,"sentimentFactor":72,"flowsFactor":80},"riskScore":30}]}
-If insufficient data: {"cryptoSignals":[]}
-Return ONLY JSON.`;
+  const prompt=`You must respond with ONLY a JSON object, nothing else. No explanation, no preamble.
+Find the best crypto trade now from: BTC/USD, ETH/USD, SOL/USD, AVAX/USD, LINK/USD, DOGE/USD.
+Your entire response must be exactly this structure:
+{"cryptoSignals":[{"symbol":"BTC/USD","name":"Bitcoin","signal":"BUY","signalScore":80,"confidence":74,"currentPrice":68500,"catalyst":"ETF inflows surge","detail":"RSI 58, breaking resistance","entryLogic":"Buy now","targetPrice":75000,"stopLoss":64000,"expectedReturn":"+9%","timeframe":"3-7 days","thesis":"Bullish breakout","factorBreakdown":{"technicalFactor":78,"sentimentFactor":72,"flowsFactor":80},"riskScore":30}]}
+If no clear signal exists respond with exactly: {"cryptoSignals":[]}`;
   try{
-    const result=await callClaude(prompt,'Strongest crypto signal right now — BTC ETH SOL price action and sentiment?',600,true);
+    const result=await callClaude(prompt,'What is the single best crypto trade right now? BTC ETH SOL AVAX LINK DOGE.',600,true);
     const newSignals=result.cryptoSignals||[];
     for(const signal of newSignals){
       signal.isCrypto=true;signal.ticker=signal.symbol;
@@ -792,6 +792,17 @@ async function runEarningsPrePositioning() {
     }
 
     log('CATALYST', '📅 Found '+upcoming.length+' upcoming earnings — ' + upcoming.map(e=>e.ticker).join(', '));
+
+    // Save ALL upcoming earnings to DB so calendar is always populated
+    for (const e of upcoming) {
+      dbUpsert('earnings_calendar', {
+        ticker: e.ticker,
+        report_date: e.date,
+        report_time: e.time || 'unknown',
+        eps_estimate: e.epsEstimate || null,
+        revenue_estimate: e.revenueEstimate || null,
+      }).catch(()=>{});
+    }
 
     // Analyse top 3 most significant upcoming earnings
     const toAnalyse = upcoming.slice(0, 3);
