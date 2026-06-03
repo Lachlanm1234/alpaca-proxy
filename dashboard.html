@@ -228,6 +228,7 @@ body { background: #f5f5f7; color: #1d1d1f; font-family: -apple-system, BlinkMac
     <button class="tab active" onclick="switchTab('log',this)">Activity</button>
     <button class="tab" onclick="switchTab('signals',this)">Signals</button>
     <button class="tab" onclick="switchTab('earnings',this)">📅 Earnings</button>
+    <button class="tab" onclick="switchTab('analytics',this)">📊 Analytics</button>
     <button class="tab" onclick="switchTab('influencers',this)">⚡ Intel</button>
     <button class="tab" onclick="switchTab('watchlists',this)">Watch</button>
     <button class="tab" onclick="switchTab('positions',this)">Holdings</button>
@@ -303,6 +304,19 @@ body { background: #f5f5f7; color: #1d1d1f; font-family: -apple-system, BlinkMac
             <span id="signals-count-badge" style="font-size:11px;color:#6e6e73">0 signals</span>
           </div>
           <div id="signals-list"><div class="empty">No active signals</div></div>
+        </div>
+      </div>
+
+      <!-- ANALYTICS -->
+      <div class="panel" id="panel-analytics">
+        <div class="card">
+          <div style="font-size:16px;font-weight:700;letter-spacing:-0.3px;margin-bottom:4px">Performance Analytics</div>
+          <div style="font-size:11px;color:#6e6e73;margin-bottom:16px">Institutional-grade performance metrics — builds as trades complete</div>
+          <div id="analytics-content"><div class="empty" style="padding:48px 0"><div style="font-size:28px;margin-bottom:10px">📊</div><div style="font-size:14px;font-weight:600;margin-bottom:4px">No trade history yet</div><div>Analytics populate as the agent executes and closes positions</div></div></div>
+        </div>
+        <div class="card">
+          <div style="font-size:16px;font-weight:700;letter-spacing:-0.3px;margin-bottom:16px">Agent Performance Leaderboard</div>
+          <div id="agent-perf-content"><div class="empty">Agent performance builds as trades complete</div></div>
         </div>
       </div>
 
@@ -600,13 +614,27 @@ async function loadSignals() {
         av.map(v=>`<div class="vote-row"><span class="vote-agent">${v.agent}</span><span class="vote-badge vote-${(v.vote||'hold').toLowerCase()}">${v.vote}</span><span class="vote-reason">${v.reason||''}</span></div>`).join('')+
         '</div></div>':'';
 
+      const hs=conv.historicalSimilarity||{};
       const convHTML=conv.probability?`
         <div class="conviction-block">
-          <div class="conv-item"><div class="conv-label">Probability</div><div class="conv-value" style="color:${typeColor}">${conv.probability}%</div><div class="conv-sub">of profit</div></div>
+          <div class="conv-item"><div class="conv-label">Probability</div><div class="conv-value" style="color:${typeColor}">${conv.probability}%</div><div class="conv-sub">${conv.convictionRating||''} conviction</div></div>
           <div class="conv-item"><div class="conv-label">Expected Return</div><div class="conv-value" style="color:#34c759">${conv.expectedReturn||s.expectedReturn||'—'}</div><div class="conv-sub">target</div></div>
           <div class="conv-item"><div class="conv-label">Worst Case</div><div class="conv-value" style="color:#ff3b30">${conv.worstCase||'—'}</div><div class="conv-sub">stop loss</div></div>
           <div class="conv-item"><div class="conv-label">Risk / Reward</div><div class="conv-value">${conv.riskReward||'—'}</div><div class="conv-sub">${conv.agentVoteSummary||''}</div></div>
-        </div>`:'';
+        </div>
+        ${hs.hasSimilarity?`<div style="margin:8px 0;padding:10px 12px;background:linear-gradient(135deg,#f0fdf4,#e0f2fe);border-radius:10px;border:1px solid #bae6fd">
+          <div style="font-size:10px;font-weight:700;color:#0369a1;letter-spacing:0.5px;text-transform:uppercase;margin-bottom:6px">📚 Historical Similarity — ${hs.similarityScore}% match</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+            <div style="text-align:center"><div style="font-size:9px;color:#6e6e73;text-transform:uppercase">Similar Events</div><div style="font-size:16px;font-weight:800;color:#0071e3">${hs.count}</div></div>
+            <div style="text-align:center"><div style="font-size:9px;color:#6e6e73;text-transform:uppercase">Win Rate</div><div style="font-size:16px;font-weight:800;color:${(hs.winRate||0)>=60?'#34c759':'#ff9500'}">${hs.winRate}%</div></div>
+            <div style="text-align:center"><div style="font-size:9px;color:#6e6e73;text-transform:uppercase">Avg Return</div><div style="font-size:16px;font-weight:800;color:${(hs.avgReturn||0)>=0?'#34c759':'#ff3b30'}">${(hs.avgReturn||0)>=0?'+':''}${hs.avgReturn}%</div></div>
+          </div>
+          <div style="display:flex;gap:16px;margin-top:8px;font-size:11px;color:#6e6e73">
+            <span>Best: <b style="color:#34c759">+${hs.bestReturn}%</b></span>
+            <span>Worst: <b style="color:#ff3b30">${hs.worstReturn}%</b></span>
+            ${hs.avgHoldDays?`<span>Avg hold: <b>${hs.avgHoldDays}d</b></span>`:''}
+          </div>
+        </div>`:hs.message?`<div style="font-size:11px;color:#6e6e73;padding:8px;background:#f9f9f9;border-radius:8px;margin:6px 0">📚 ${hs.message}</div>`:''}`:'';
 
       return `<div class="signal-card-item">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
@@ -732,6 +760,69 @@ async function loadPending() {
 }
 
 // ── ACTIONS ───────────────────────────────────────────────────────
+async function loadAnalytics() {
+  try {
+    const [analytics, agentStats] = await Promise.all([
+      fetch(`${BASE}/analytics`).then(r=>r.json()),
+      fetch(`${BASE}/agent-stats`).then(r=>r.json()),
+    ]);
+
+    const el = document.getElementById('analytics-content');
+    if (el && analytics && analytics.totalTrades > 0) {
+      const best = analytics.bestCatalysts||[];
+      const worst = analytics.worstCatalysts||[];
+      el.innerHTML = `
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px">
+          <div style="background:#f9f9f9;border-radius:12px;padding:14px;text-align:center">
+            <div style="font-size:10px;color:#6e6e73;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Win Rate</div>
+            <div style="font-size:28px;font-weight:800;color:${analytics.winRate>=55?'#34c759':'#ff9500'}">${analytics.winRate}%</div>
+            <div style="font-size:11px;color:#6e6e73">${analytics.totalTrades} trades</div>
+          </div>
+          <div style="background:#f9f9f9;border-radius:12px;padding:14px;text-align:center">
+            <div style="font-size:10px;color:#6e6e73;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Avg Return</div>
+            <div style="font-size:28px;font-weight:800;color:${analytics.avgReturn>=0?'#34c759':'#ff3b30'}">${analytics.avgReturn>=0?'+':''}${analytics.avgReturn}%</div>
+            <div style="font-size:11px;color:#6e6e73">Sharpe: ${analytics.sharpeRatio}</div>
+          </div>
+          <div style="background:#f9f9f9;border-radius:12px;padding:14px;text-align:center">
+            <div style="font-size:10px;color:#6e6e73;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Best Trade</div>
+            <div style="font-size:24px;font-weight:800;color:#34c759">+${analytics.bestReturn}%</div>
+          </div>
+          <div style="background:#f9f9f9;border-radius:12px;padding:14px;text-align:center">
+            <div style="font-size:10px;color:#6e6e73;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Worst Trade</div>
+            <div style="font-size:24px;font-weight:800;color:#ff3b30">${analytics.worstReturn}%</div>
+          </div>
+        </div>
+        ${best.length?`<div style="margin-bottom:14px"><div style="font-size:11px;font-weight:700;color:#6e6e73;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Best Performing Catalysts</div>
+        ${best.map(c=>`<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f5f5f7">
+          <div><div style="font-size:13px;font-weight:600">${c.catalyst}</div><div style="font-size:11px;color:#6e6e73">${c.count} trades</div></div>
+          <div style="text-align:right"><div style="font-size:13px;font-weight:700;color:#34c759">${c.winRate}% win</div><div style="font-size:11px;color:#6e6e73">avg ${c.avgReturn>=0?'+':''}${c.avgReturn}%</div></div>
+        </div>`).join('')}</div>`:''}
+        ${worst.length?`<div><div style="font-size:11px;font-weight:700;color:#6e6e73;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Weakest Catalysts</div>
+        ${worst.map(c=>`<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f5f5f7">
+          <div><div style="font-size:13px;font-weight:600">${c.catalyst}</div><div style="font-size:11px;color:#6e6e73">${c.count} trades</div></div>
+          <div style="text-align:right"><div style="font-size:13px;font-weight:700;color:#ff9500">${c.winRate}% win</div><div style="font-size:11px;color:#6e6e73">avg ${c.avgReturn>=0?'+':''}${c.avgReturn}%</div></div>
+        </div>`).join('')}</div>`:''}`;
+    }
+
+    const agentEl = document.getElementById('agent-perf-content');
+    if (agentEl && agentStats && agentStats.length) {
+      agentEl.innerHTML = agentStats.map(a=>`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f5f5f7">
+          <div>
+            <div style="font-size:14px;font-weight:600">${a.agent}</div>
+            <div style="font-size:11px;color:#6e6e73">${a.total} predictions</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:16px;font-weight:800;color:${a.winRate>=65?'#34c759':a.winRate>=50?'#ff9500':'#ff3b30'}">${a.winRate}%</div>
+            <div style="font-size:11px;color:#6e6e73">accuracy</div>
+          </div>
+        </div>`).join('');
+    } else if (agentEl) {
+      agentEl.innerHTML = '<div class="empty">Agent accuracy builds as trades complete and close</div>';
+    }
+  } catch(e){}
+}
+
 async function triggerEarnings() {
   try {
     await fetch(`${BASE}/earnings-now`, {method:'POST'});
@@ -792,7 +883,7 @@ async function clearQueue() {
 }
 
 async function loadAll() {
-  await Promise.all([loadAccount(),loadPositions(),loadStatus(),loadLog(),loadSignals(),loadInfluencers(),loadWatchlists(),loadPending(),loadDNA(),loadBriefing(),loadEarnings()]);
+  await Promise.all([loadAccount(),loadPositions(),loadStatus(),loadLog(),loadSignals(),loadInfluencers(),loadWatchlists(),loadPending(),loadDNA(),loadBriefing(),loadEarnings(),loadAnalytics()]);
 }
 
 loadAll();

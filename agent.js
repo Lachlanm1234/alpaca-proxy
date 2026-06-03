@@ -412,13 +412,193 @@ function updateWatchlists(signal) {
 }
 
 // ── TRADE DNA ─────────────────────────────────────────────────────
-function recordTradeOutcome(ticker, entryPrice, exitPrice, catalyst, signalScore, reason) {
-  const returnPct=entryPrice>0?((exitPrice-entryPrice)/entryPrice)*100:0;
-  const record={ticker,entryPrice,exitPrice,catalyst,signalScore,returnPct:parseFloat(returnPct.toFixed(2)),profitable:returnPct>0,reason,date:new Date().toISOString()};
+function recordTradeOutcome(ticker, entryPrice, exitPrice, catalyst, signalScore, reason, extraData) {
+  extraData = extraData || {};
+  const returnPct = entryPrice>0 ? ((exitPrice-entryPrice)/entryPrice)*100 : 0;
+  const holdDays = extraData.entryDate ? (Date.now()-new Date(extraData.entryDate).getTime())/(1000*60*60*24) : null;
+  const record = {
+    ticker, entryPrice, exitPrice, catalyst, signalScore,
+    returnPct: parseFloat(returnPct.toFixed(2)),
+    profitable: returnPct > 0, reason,
+    signalType: extraData.signalType || 'unknown',
+    sector: extraData.sector || null,
+    factorBreakdown: extraData.factorBreakdown || null,
+    agentVotes: extraData.agentVotes || null,
+    holdingPeriodDays: holdDays ? parseFloat(holdDays.toFixed(1)) : null,
+    confidence: extraData.confidence || null,
+    riskScore: extraData.riskScore || null,
+    isCrypto: extraData.isCrypto || false,
+    date: new Date().toISOString()
+  };
   tradeDNA.push(record);
-  if(tradeDNA.length>200) tradeDNA.shift();
-  log('DNA','📊 Trade recorded: '+ticker+' '+returnPct.toFixed(1)+'% ['+reason+']',{ticker,returnPct,profitable:returnPct>0});
-  dbInsert('trade_dna',{ticker,entry_price:entryPrice,exit_price:exitPrice,return_pct:record.returnPct,profitable:record.profitable,catalyst,signal_score:signalScore,reason}).catch(()=>{});
+  if(tradeDNA.length>500) tradeDNA.shift();
+  log('DNA','📊 Trade recorded: '+ticker+' '+returnPct.toFixed(1)+'% ['+reason+']',{ticker,returnPct,profitable:returnPct>0,signalType:record.signalType});
+  // Store enriched record in Supabase
+  dbInsert('trade_dna',{
+    ticker, entry_price:entryPrice, exit_price:exitPrice,
+    return_pct:record.returnPct, profitable:record.profitable,
+    catalyst, signal_score:signalScore, reason,
+    signal_type:record.signalType, sector:record.sector,
+    factor_breakdown:record.factorBreakdown?JSON.stringify(record.factorBreakdown):null,
+    agent_votes:record.agentVotes?JSON.stringify(record.agentVotes):null,
+    holding_period_days:record.holdingPeriodDays,
+    confidence:record.confidence, risk_score:record.riskScore,
+    is_crypto:record.isCrypto,
+  }).catch(()=>{});
+  // Track agent performance
+  if (record.agentVotes && Array.isArray(record.agentVotes)) {
+    record.agentVotes.forEach(av => {
+      const expectedVote = returnPct > 0 ? 'BUY' : 'SELL';
+      const wasCorrect = av.vote === expectedVote || (av.vote === 'HOLD' && Math.abs(returnPct) < 3);
+      dbInsert('agent_performance',{
+        agent_name:av.agent, ticker, vote:av.vote, signal_score:signalScore,
+        outcome:reason, return_pct:record.returnPct, was_correct:wasCorrect
+      }).catch(()=>{});
+    });
+  }
+}
+
+// ── HISTORICAL SIMILARITY ENGINE ─────────────────────────────────
+// Compares a new signal against all past trade DNA to find similar setups
+function calculateHistoricalSimilarity(signal) {
+  if (tradeDNA.length < 3) {
+    return { hasSimilarity: false, message: 'Building history — need more trades', count: 0 };
+  }
+
+  const signalCatalyst = (signal.catalyst||'').toLowerCase();
+  const signalScore = signal.signalScore || 70;
+  const isCrypto = signal.isCrypto || false;
+
+  // Determine signal type
+  let signalType = 'unknown';
+  if (signalCatalyst.includes('earnings beat') || signalCatalyst.includes('eps beat')) signalType = 'earnings_beat';
+  else if (signalCatalyst.includes('earnings miss') || signalCatalyst.includes('eps miss')) signalType = 'earnings_miss';
+  else if (signalCatalyst.includes('analyst upgrade')) signalType = 'analyst_upgrade';
+  else if (signalCatalyst.includes('insider buy')) signalType = 'insider_buy';
+  else if (signalCatalyst.includes('influencer')) signalType = 'influencer';
+  else if (isCrypto) signalType = 'crypto';
+  else if (signal.signal === 'SHORT') signalType = 'short';
+
+  // Find similar historical trades
+  const similar = tradeDNA.filter(trade => {
+    const tradeCatalyst = (trade.catalyst||'').toLowerCase();
+    let tradeType = 'unknown';
+    if (tradeCatalyst.includes('earnings beat')||tradeCatalyst.includes('eps beat')) tradeType = 'earnings_beat';
+    else if (tradeCatalyst.includes('earnings miss')) tradeType = 'earnings_miss';
+    else if (tradeCatalyst.includes('analyst upgrade')) tradeType = 'analyst_upgrade';
+    else if (tradeCatalyst.includes('insider buy')) tradeType = 'insider_buy';
+    else if (tradeCatalyst.includes('influencer')) tradeType = 'influencer';
+    else if (trade.isCrypto) tradeType = 'crypto';
+    else if (trade.signalType === 'short') tradeType = 'short';
+
+    const typeMatch = signalType === tradeType;
+    const scoreMatch = Math.abs((trade.signalScore||70) - signalScore) <= 15;
+    return typeMatch || (scoreMatch && tradeType !== 'unknown');
+  });
+
+  if (similar.length < 2) {
+    // Try broader match just by score range
+    const byScore = tradeDNA.filter(t => Math.abs((t.signalScore||70)-signalScore) <= 20);
+    if (byScore.length < 2) return { hasSimilarity: false, message: 'No similar historical setups yet', count: 0 };
+    return buildSimilarityResult(byScore, signalType, 40);
+  }
+
+  // Calculate similarity score (how closely matched are they)
+  const similarityScore = Math.min(99, 50 + (similar.length >= 10 ? 30 : similar.length * 3) + (signalType !== 'unknown' ? 20 : 0));
+  return buildSimilarityResult(similar, signalType, similarityScore);
+}
+
+function buildSimilarityResult(trades, signalType, similarityScore) {
+  const wins = trades.filter(t => t.profitable);
+  const winRate = Math.round(wins.length / trades.length * 100);
+  const returns = trades.map(t => t.returnPct || 0);
+  const avgReturn = parseFloat((returns.reduce((s,r)=>s+r,0)/returns.length).toFixed(2));
+  const bestReturn = parseFloat(Math.max(...returns).toFixed(2));
+  const worstReturn = parseFloat(Math.min(...returns).toFixed(2));
+  const holdTimes = trades.filter(t=>t.holdingPeriodDays).map(t=>t.holdingPeriodDays);
+  const avgHoldDays = holdTimes.length ? parseFloat((holdTimes.reduce((s,h)=>s+h,0)/holdTimes.length).toFixed(1)) : null;
+
+  return {
+    hasSimilarity: true,
+    similarityScore,
+    count: trades.length,
+    winRate,
+    avgReturn,
+    bestReturn,
+    worstReturn,
+    avgHoldDays,
+    signalType,
+    summary: `${trades.length} similar setups — ${winRate}% win rate, avg ${avgReturn>=0?'+':''}${avgReturn}%`,
+  };
+}
+
+// ── AGENT PERFORMANCE STATS ───────────────────────────────────────
+async function getAgentStats() {
+  if (!DB) {
+    // Calculate from in-memory trade DNA
+    return INFLUENCERS.map(i => ({ agent: i.name, wins: 0, total: 0, winRate: 0 }));
+  }
+  try {
+    const rows = await dbSelect('agent_performance', 'order=created_at.desc&limit=500');
+    if (!Array.isArray(rows) || !rows.length) return [];
+    const byAgent = {};
+    rows.forEach(r => {
+      if (!byAgent[r.agent_name]) byAgent[r.agent_name] = { agent: r.agent_name, wins: 0, total: 0 };
+      byAgent[r.agent_name].total++;
+      if (r.was_correct) byAgent[r.agent_name].wins++;
+    });
+    return Object.values(byAgent).map(a => ({
+      ...a,
+      winRate: a.total > 0 ? Math.round(a.wins/a.total*100) : 0
+    })).sort((a,b) => b.winRate - a.winRate);
+  } catch(e) { return []; }
+}
+
+// ── PERFORMANCE ANALYTICS ─────────────────────────────────────────
+function getPerformanceAnalytics() {
+  if (tradeDNA.length === 0) return null;
+  const wins = tradeDNA.filter(t=>t.profitable);
+  const losses = tradeDNA.filter(t=>!t.profitable);
+  const returns = tradeDNA.map(t=>t.returnPct||0);
+  const avgReturn = returns.reduce((s,r)=>s+r,0)/returns.length;
+  const winRate = Math.round(wins.length/tradeDNA.length*100);
+
+  // Sharpe ratio (simplified — return/volatility)
+  const variance = returns.reduce((s,r)=>s+Math.pow(r-avgReturn,2),0)/returns.length;
+  const stdDev = Math.sqrt(variance);
+  const sharpe = stdDev > 0 ? parseFloat((avgReturn/stdDev).toFixed(2)) : 0;
+
+  // Best and worst catalysts
+  const byCatalyst = {};
+  tradeDNA.forEach(t => {
+    const cat = (t.catalyst||'unknown').split(' ').slice(0,2).join(' ').toLowerCase();
+    if (!byCatalyst[cat]) byCatalyst[cat] = {wins:0,total:0,returns:[]};
+    byCatalyst[cat].total++;
+    if(t.profitable) byCatalyst[cat].wins++;
+    byCatalyst[cat].returns.push(t.returnPct||0);
+  });
+  const catalystStats = Object.entries(byCatalyst)
+    .filter(([,v])=>v.total>=2)
+    .map(([cat,v])=>({
+      catalyst: cat,
+      winRate: Math.round(v.wins/v.total*100),
+      avgReturn: parseFloat((v.returns.reduce((s,r)=>s+r,0)/v.returns.length).toFixed(2)),
+      count: v.total
+    }))
+    .sort((a,b)=>b.winRate-a.winRate);
+
+  return {
+    totalTrades: tradeDNA.length,
+    winRate,
+    avgReturn: parseFloat(avgReturn.toFixed(2)),
+    bestReturn: parseFloat(Math.max(...returns).toFixed(2)),
+    worstReturn: parseFloat(Math.min(...returns).toFixed(2)),
+    sharpeRatio: sharpe,
+    profitFactor: losses.length > 0 ? parseFloat((wins.reduce((s,t)=>s+t.returnPct,0)/Math.abs(losses.reduce((s,t)=>s+t.returnPct,0))).toFixed(2)) : null,
+    bestCatalysts: catalystStats.slice(0,5),
+    worstCatalysts: [...catalystStats].sort((a,b)=>a.winRate-b.winRate).slice(0,3),
+    recentTrades: tradeDNA.slice(-10).reverse(),
+  };
 }
 
 function getTradeDNASummary() {
@@ -464,7 +644,17 @@ function buildConviction(signal, agentVotes) {
   const sellCount=agentVotes.filter(v=>v.vote==='SELL').length;
   const total=agentVotes.length;
   const consensus=isShort?(sellCount/total)*100:(buyCount/total)*100;
-  const probability=Math.round((signal.confidence||70)*0.65+consensus*0.35);
+
+  // Get historical similarity
+  const similarity = calculateHistoricalSimilarity(signal);
+
+  // Probability = blend of confidence + agent consensus + historical win rate
+  let probability = (signal.confidence||70)*0.5 + consensus*0.3;
+  if (similarity.hasSimilarity && similarity.winRate) {
+    probability = probability*0.7 + similarity.winRate*0.3;
+  }
+  probability = Math.round(probability);
+
   const entry=parseFloat(signal.currentPrice||0);
   const target=parseFloat(signal.targetPrice||0);
   const stop=parseFloat(signal.stopLoss||0);
@@ -473,7 +663,23 @@ function buildConviction(signal, agentVotes) {
   const upside=target&&entry?Math.abs(target-entry):0;
   const downside=stop&&entry?Math.abs(stop-entry):1;
   const riskReward=downside>0?(upside/downside).toFixed(1)+':1':'—';
-  return {probability,expectedReturn,worstCase,riskReward,agentConsensus:Math.round(consensus),buyVotes:buyCount,sellVotes:sellCount,holdVotes:total-buyCount-sellCount,agentVoteSummary:buyCount+'/'+total+' agents '+(isShort?'bearish':'bullish'),dnaSummary:getTradeDNASummary(),agentVotes};
+
+  // Conviction rating
+  let convictionRating = 'Low';
+  if (probability >= 75 && (signal.signalScore||0) >= 80) convictionRating = 'Very High';
+  else if (probability >= 65 && (signal.signalScore||0) >= 72) convictionRating = 'High';
+  else if (probability >= 55) convictionRating = 'Medium';
+
+  return {
+    probability, expectedReturn, worstCase, riskReward,
+    agentConsensus:Math.round(consensus),
+    buyVotes:buyCount, sellVotes:sellCount, holdVotes:total-buyCount-sellCount,
+    agentVoteSummary:buyCount+'/'+total+' agents '+(isShort?'bearish':'bullish'),
+    dnaSummary:getTradeDNASummary(),
+    agentVotes,
+    historicalSimilarity: similarity,
+    convictionRating,
+  };
 }
 
 // ── POSITION SIZING ───────────────────────────────────────────────
@@ -539,19 +745,19 @@ async function managePositions(positions) {
     if(pnl<=stopT){
       log('RISK','🛑 Stop loss: '+p.symbol+' at '+pnl.toFixed(1)+'%',{ticker:p.symbol,pnlPct:pnl,reason:'STOP_LOSS',isShort,isCrypto});
       await alpaca('/v2/positions/'+encodeURIComponent(p.symbol),{method:'DELETE'});
-      recordTradeOutcome(p.symbol,entry,current,'stop loss',0,'STOP_LOSS');
+      recordTradeOutcome(p.symbol,entry,current,'stop loss',0,'STOP_LOSS',{isCrypto,signalType:isCrypto?'crypto':isShort?'short':'long'});
       delete sellEvalCache[p.symbol];
     }else if(pnl>=hardT){
       log('PROFIT','🎯 Hard take profit: '+p.symbol+' at +'+pnl.toFixed(1)+'%',{ticker:p.symbol,pnlPct:pnl,reason:'TAKE_PROFIT_HARD',isShort,isCrypto});
       await alpaca('/v2/positions/'+encodeURIComponent(p.symbol),{method:'DELETE'});
-      recordTradeOutcome(p.symbol,entry,current,'hard take profit',0,'TAKE_PROFIT_HARD');
+      recordTradeOutcome(p.symbol,entry,current,'hard take profit',0,'TAKE_PROFIT_HARD',{isCrypto,signalType:isCrypto?'crypto':isShort?'short':'long'});
       delete sellEvalCache[p.symbol];
     }else if(pnl>=warnT){
       const sell=await shouldSell(p.symbol,pnl,entry,current,isCrypto);
       if(sell){
         log('PROFIT','🎯 AI-confirmed sell: '+p.symbol+' at +'+pnl.toFixed(1)+'%',{ticker:p.symbol,pnlPct:pnl,reason:'TAKE_PROFIT_AI',isShort,isCrypto});
         await alpaca('/v2/positions/'+encodeURIComponent(p.symbol),{method:'DELETE'});
-        recordTradeOutcome(p.symbol,entry,current,'AI take profit',0,'TAKE_PROFIT_AI');
+        recordTradeOutcome(p.symbol,entry,current,'AI take profit',0,'TAKE_PROFIT_AI',{isCrypto,signalType:isCrypto?'crypto':isShort?'short':'long'});
         delete sellEvalCache[p.symbol];
       }
     }
@@ -582,12 +788,17 @@ async function runMorningBriefing() {
   state.status='MORNING_BRIEFING';state.lastIntel=new Date().toISOString();
   log('INTEL','☀️ Generating morning briefing...');
   const dna=getTradeDNASummary();
-  const prompt=`AI Portfolio Manager giving pre-market briefing. Search overnight news, futures, key themes. Trade history: ${dna}
-Return ONLY JSON:
-{"greeting":"Good morning. [One sentence key overnight development]","marketRegime":"RISK_ON","futuresSnapshot":"Brief futures direction","topWatches":[{"ticker":"NVDA","reason":"Why watch today","bias":"BULLISH"}],"sectorFocus":"Interesting sector and why","keyRisk":"Biggest risk today","topIdea":{"ticker":"AAPL","catalyst":"Why best trade today","action":"BUY"}}
-Keep all strings under 100 chars. Return ONLY JSON.`;
+  const analytics = getPerformanceAnalytics();
+  const analyticsContext = analytics
+    ? `Portfolio stats: ${analytics.totalTrades} trades, ${analytics.winRate}% win rate, avg return ${analytics.avgReturn}%`
+    : 'No trade history yet';
+
+  const prompt=`You are an AI Chief Investment Officer. Search overnight news and futures. Context: ${dna}. ${analyticsContext}
+Generate an institutional morning briefing. Respond with ONLY JSON:
+{"greeting":"Good morning. [Key overnight development in one sentence]","portfolioRiskScore":65,"marketRegime":"RISK_ON","futuresSnapshot":"Brief futures","topWatches":[{"ticker":"NVDA","reason":"Why today","bias":"BULLISH","expectedMove":"+2%"}],"sectorFocus":"Which sector and why","keyRisk":"Biggest risk","recommendedActions":["Action 1","Action 2"],"topIdea":{"ticker":"AAPL","catalyst":"Why best trade","action":"BUY","confidence":78}}
+All strings under 100 chars. Return ONLY JSON.`;
   try{
-    const result=await callClaude(prompt,'Search overnight futures and pre-market catalysts for today.',700,true);
+    const result=await callClaude(prompt,'Search overnight futures, pre-market movers, and key catalysts for today.',700,true);
     morningBriefing={...result,generatedAt:new Date().toISOString()};
     log('INTEL','☀️ '+(result.greeting||'Morning briefing ready'),{marketRegime:result.marketRegime});
     if(result.topIdea) log('INTEL','💡 Top idea: '+result.topIdea.ticker+' — '+result.topIdea.catalyst,{ticker:result.topIdea.ticker});
@@ -995,6 +1206,12 @@ app.get('/tradedna',(req,res)=>res.json({summary:getTradeDNASummary(),trades:tra
 app.get('/health',(req,res)=>res.json({ok:true,uptime:process.uptime(),dbConnected:!!DB}));
 app.post('/scan-now',(req,res)=>{res.json({message:'Catalyst scan triggered'});runCatalystScan();});
 app.post('/earnings-now',(req,res)=>{res.json({message:'Earnings scan triggered'});runEarningsPrePositioning();});
+app.get('/analytics',(req,res)=>res.json(getPerformanceAnalytics()||{}));
+app.get('/agent-stats',(req,res)=>getAgentStats().then(d=>res.json(d)).catch(()=>res.json([])));
+app.get('/similarity/:ticker',(req,res)=>{
+  const sig={ticker:req.params.ticker,catalyst:req.query.catalyst||'',signalScore:parseInt(req.query.score)||70,signal:req.query.signal||'BUY'};
+  res.json(calculateHistoricalSimilarity(sig));
+});
 app.get('/earnings',(req,res)=>dbSelect('earnings_calendar','order=report_date.asc&limit=20').then(d=>res.json(d||[])).catch(()=>res.json([])));
 app.post('/crypto-now',(req,res)=>{res.json({message:'Crypto scan triggered'});runCryptoScan();});
 app.post('/intel-now',(req,res)=>{res.json({message:'Morning briefing triggered'});runMorningBriefing();});
