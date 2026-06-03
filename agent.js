@@ -618,13 +618,13 @@ async function runInfluencerScan() {
   state.status='INFLUENCER_SCAN';state.lastInfluencer=new Date().toISOString();
   log('INFLUENCER','⚡ Scanning Musk, Trump, Powell, Wood, Pelosi, Burry, Buffett...');
   const names=INFLUENCERS.map(i=>i.name).join(', ');
-  const prompt=`Search for market-moving statements from: ${names} in last 24hrs. Also check congressional stock disclosures.
-Return ONLY JSON (max 2 items, all strings under 100 chars):
-{"influencerActivity":[{"person":"Elon Musk","platform":"X","action":"Posted about AI robots","relatedTickers":["NVDA","TSLA"],"relatedSectors":["AI"],"estimatedImpact":"+2-3%","impactLagHours":2,"confidence":75,"sentiment":"BULLISH","urgency":"MEDIUM","tradingImplication":"NVDA benefits from AI demand"}]}
-If nothing found: {"influencerActivity":[]}
-Return ONLY JSON.`;
+  const prompt=`You must respond with ONLY a JSON object. No explanation, no preamble, no text before or after.
+Search for recent statements from: ${names} that could move markets.
+Your entire response must be exactly this format:
+{"influencerActivity":[{"person":"Elon Musk","platform":"X","action":"Posted about AI","relatedTickers":["NVDA"],"relatedSectors":["AI"],"estimatedImpact":"+2%","impactLagHours":2,"confidence":75,"sentiment":"BULLISH","urgency":"MEDIUM","tradingImplication":"NVDA benefits"}]}
+If nothing found, respond with exactly: {"influencerActivity":[]}`;
   try{
-    const result=await callClaude(prompt,'Any market-moving news from Musk, Trump, Powell, Wood, Pelosi, Burry in last 24 hours?',650,true);
+    const result=await callClaude(prompt,'Did Musk Trump Powell Wood Pelosi Burry or Buffett say anything market-moving in last 24 hours?',600,true);
     const activities=result.influencerActivity||[];
     activities.forEach(activity=>{
       const known=INFLUENCERS.find(i=>i.name===activity.person);
