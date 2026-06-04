@@ -2154,6 +2154,110 @@ app.get('/watchlists',(req,res)=>res.json(watchlists));
 app.get('/briefing',(req,res)=>res.json(morningBriefing||{message:'No briefing yet. Runs at 9am ET.'}));
 app.get('/tradedna',(req,res)=>res.json({summary:getTradeDNASummary(),trades:tradeDNA.slice(-50),totalTrades:tradeDNA.length,winRate:tradeDNA.length>0?Math.round(tradeDNA.filter(t=>t.profitable).length/tradeDNA.length*100):0}));
 app.get('/health',(req,res)=>res.json({ok:true,uptime:process.uptime(),dbConnected:!!DB}));
+
+// ── TRADE LOG — pulls full order history from Alpaca ──────────────
+app.get('/trade-log', async (req, res) => {
+  try {
+    const limit = req.query.limit || 200;
+
+    // Fetch all closed/filled orders from Alpaca
+    const orders = await fetch(
+      `${ALPACA_BASE}/v2/orders?status=closed&limit=${limit}&direction=desc`,
+      { headers: { 'APCA-API-KEY-ID': ALPACA_KEY, 'APCA-API-SECRET-KEY': ALPACA_SECRET } }
+    ).then(r => r.json());
+
+    if (!Array.isArray(orders)) return res.json({ orders: [], summary: {} });
+
+    // Filter to filled orders only
+    const filled = orders.filter(o => o.status === 'filled' && parseFloat(o.filled_qty) > 0);
+
+    // Build enriched order list
+    const trades = filled.map(o => {
+      const qty    = parseFloat(o.filled_qty || 0);
+      const price  = parseFloat(o.filled_avg_price || 0);
+      const value  = qty * price;
+      const isCrypto = o.asset_class === 'crypto';
+      const isShort = o.side === 'sell' && !o.close_position; // sell without close = short
+
+      return {
+        id:          o.id,
+        orderId:     o.id,
+        symbol:      o.symbol,
+        side:        o.side,
+        type:        o.type,
+        qty:         qty,
+        price:       price,
+        value:       parseFloat(value.toFixed(2)),
+        filledAt:    o.filled_at || o.updated_at,
+        createdAt:   o.created_at,
+        isCrypto:    isCrypto,
+        status:      o.status,
+        timeInForce: o.time_in_force,
+        displaySide: o.side === 'buy' ? 'BUY' : 'SELL/SHORT',
+        assetClass:  o.asset_class,
+      };
+    });
+
+    // Group by symbol to calculate round-trip P&L
+    const bySymbol = {};
+    trades.forEach(t => {
+      if (!bySymbol[t.symbol]) bySymbol[t.symbol] = { buys: [], sells: [] };
+      if (t.side === 'buy') bySymbol[t.symbol].buys.push(t);
+      else bySymbol[t.symbol].sells.push(t);
+    });
+
+    // Calculate realized P&L per symbol
+    const realizedPnL = [];
+    Object.entries(bySymbol).forEach(([symbol, { buys, sells }]) => {
+      if (buys.length > 0 && sells.length > 0) {
+        const totalBought = buys.reduce((s, t) => s + t.value, 0);
+        const totalSold   = sells.reduce((s, t) => s + t.value, 0);
+        const pnl         = totalSold - totalBought;
+        const pnlPct      = totalBought > 0 ? (pnl / totalBought * 100) : 0;
+        realizedPnL.push({
+          symbol,
+          totalBought:  parseFloat(totalBought.toFixed(2)),
+          totalSold:    parseFloat(totalSold.toFixed(2)),
+          realizedPnl:  parseFloat(pnl.toFixed(2)),
+          pnlPct:       parseFloat(pnlPct.toFixed(2)),
+          profitable:   pnl > 0,
+          buyCount:     buys.length,
+          sellCount:    sells.length,
+        });
+      }
+    });
+
+    realizedPnL.sort((a, b) => Math.abs(b.realizedPnl) - Math.abs(a.realizedPnl));
+
+    // Summary stats
+    const totalRealized    = realizedPnL.reduce((s, p) => s + p.realizedPnl, 0);
+    const winners          = realizedPnL.filter(p => p.profitable);
+    const losers           = realizedPnL.filter(p => !p.profitable);
+    const winRate          = realizedPnL.length > 0 ? Math.round(winners.length / realizedPnL.length * 100) : 0;
+    const avgWin           = winners.length > 0 ? winners.reduce((s,p)=>s+p.pnlPct,0)/winners.length : 0;
+    const avgLoss          = losers.length  > 0 ? losers.reduce((s,p) =>s+p.pnlPct,0)/losers.length  : 0;
+
+    res.json({
+      orders: trades,
+      realizedPnL,
+      summary: {
+        totalOrders:    trades.length,
+        filledOrders:   trades.length,
+        buyOrders:      trades.filter(t => t.side === 'buy').length,
+        sellOrders:     trades.filter(t => t.side === 'sell').length,
+        totalRealized:  parseFloat(totalRealized.toFixed(2)),
+        winRate,
+        winners:        winners.length,
+        losers:         losers.length,
+        avgWinPct:      parseFloat(avgWin.toFixed(2)),
+        avgLossPct:     parseFloat(avgLoss.toFixed(2)),
+        symbolsTraded:  Object.keys(bySymbol).length,
+      },
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 app.post('/scan-now',(req,res)=>{res.json({message:'Catalyst scan triggered'});runCatalystScan();});
 app.post('/earnings-now',(req,res)=>{res.json({message:'Earnings scan triggered'});runEarningsPrePositioning();});
 app.get('/earnings/history/:ticker', async (req, res) => {
