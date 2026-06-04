@@ -254,6 +254,289 @@ async function getRealTimeQuote(ticker) {
   return price ? { price, change: null, changePct: null, volume: null } : null;
 }
 
+// ── TECHNICAL ANALYSIS ENGINE ────────────────────────────────────
+// Fetches 365 days of price history from Alpaca and calculates
+// all standard technical indicators. Free — uses existing Alpaca connection.
+
+async function fetchPriceBars(ticker, days) {
+  days = days || 365;
+  try {
+    const isCrypto = ticker.includes('/');
+    const start = new Date();
+    start.setDate(start.getDate() - days);
+    const startStr = start.toISOString().split('T')[0];
+
+    if (isCrypto) {
+      const sym = encodeURIComponent(ticker);
+      const r = await fetch(
+        `${ALPACA_DATA}/v1beta3/crypto/us/bars?symbols=${sym}&timeframe=1Day&start=${startStr}&limit=365`,
+        { headers: { 'APCA-API-KEY-ID': ALPACA_KEY, 'APCA-API-SECRET-KEY': ALPACA_SECRET } }
+      );
+      const d = await r.json();
+      const bars = d.bars && d.bars[ticker];
+      return Array.isArray(bars) ? bars : [];
+    } else {
+      const r = await fetch(
+        `${ALPACA_DATA}/v2/stocks/${ticker}/bars?timeframe=1Day&start=${startStr}&adjustment=raw&limit=365`,
+        { headers: { 'APCA-API-KEY-ID': ALPACA_KEY, 'APCA-API-SECRET-KEY': ALPACA_SECRET } }
+      );
+      const d = await r.json();
+      return Array.isArray(d.bars) ? d.bars : [];
+    }
+  } catch(e) {
+    log('ERROR', 'Failed to fetch price bars for '+ticker+': '+e.message);
+    return [];
+  }
+}
+
+function calcSMA(closes, period) {
+  if (closes.length < period) return null;
+  const slice = closes.slice(-period);
+  return slice.reduce((s, v) => s + v, 0) / period;
+}
+
+function calcEMA(closes, period) {
+  if (closes.length < period) return null;
+  const k = 2 / (period + 1);
+  let ema = closes.slice(0, period).reduce((s, v) => s + v, 0) / period;
+  for (let i = period; i < closes.length; i++) {
+    ema = closes[i] * k + ema * (1 - k);
+  }
+  return ema;
+}
+
+function calcRSI(closes, period) {
+  period = period || 14;
+  if (closes.length < period + 1) return null;
+  const recent = closes.slice(-(period + 1));
+  let gains = 0, losses = 0;
+  for (let i = 1; i < recent.length; i++) {
+    const change = recent[i] - recent[i - 1];
+    if (change > 0) gains += change;
+    else losses += Math.abs(change);
+  }
+  const avgGain = gains / period;
+  const avgLoss = losses / period;
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return parseFloat((100 - 100 / (1 + rs)).toFixed(2));
+}
+
+function calcSupportResistance(bars, lookback) {
+  lookback = lookback || 90; // Last 90 days for key levels
+  const recent = bars.slice(-lookback);
+  const highs = recent.map(b => b.h);
+  const lows  = recent.map(b => b.l);
+
+  // Find local maxima and minima
+  const resistanceLevels = [], supportLevels = [];
+  for (let i = 2; i < highs.length - 2; i++) {
+    if (highs[i] > highs[i-1] && highs[i] > highs[i-2] && highs[i] > highs[i+1] && highs[i] > highs[i+2]) {
+      resistanceLevels.push(highs[i]);
+    }
+    if (lows[i] < lows[i-1] && lows[i] < lows[i-2] && lows[i] < lows[i+1] && lows[i] < lows[i+2]) {
+      supportLevels.push(lows[i]);
+    }
+  }
+
+  const currentPrice = bars[bars.length - 1].c;
+
+  // Find nearest support below and resistance above current price
+  const supports = supportLevels.filter(l => l < currentPrice).sort((a,b) => b - a);
+  const resistances = resistanceLevels.filter(l => l > currentPrice).sort((a,b) => a - b);
+
+  return {
+    nearestSupport: supports[0] ? parseFloat(supports[0].toFixed(2)) : null,
+    nearestResistance: resistances[0] ? parseFloat(resistances[0].toFixed(2)) : null,
+    supportLevels: supports.slice(0, 3).map(l => parseFloat(l.toFixed(2))),
+    resistanceLevels: resistances.slice(0, 3).map(l => parseFloat(l.toFixed(2))),
+  };
+}
+
+function detectTrend(bars, closes) {
+  // Higher highs and higher lows = uptrend, vice versa
+  const recent20  = bars.slice(-20);
+  const recent50  = bars.slice(-50);
+  const recent200 = bars.slice(-200);
+
+  const sma20  = calcSMA(closes, 20);
+  const sma50  = calcSMA(closes, 50);
+  const sma200 = calcSMA(closes, 200);
+  const current = closes[closes.length - 1];
+
+  // Trend strength: how many SMAs is price above?
+  let aboveSMAs = 0;
+  if (sma20  && current > sma20)  aboveSMAs++;
+  if (sma50  && current > sma50)  aboveSMAs++;
+  if (sma200 && current > sma200) aboveSMAs++;
+
+  // Check SMA alignment (bullish = 20 > 50 > 200)
+  const smaAligned = sma20 && sma50 && sma200 && sma20 > sma50 && sma50 > sma200;
+
+  // Recent momentum: price change over last 20 days
+  const momentum20d = recent20.length >= 2
+    ? ((recent20[recent20.length-1].c - recent20[0].c) / recent20[0].c * 100)
+    : 0;
+
+  let trend, trendStrength;
+  if (aboveSMAs === 3 && smaAligned && momentum20d > 2) {
+    trend = 'STRONG UPTREND'; trendStrength = 90;
+  } else if (aboveSMAs >= 2 && momentum20d > 0) {
+    trend = 'UPTREND'; trendStrength = 70;
+  } else if (aboveSMAs === 0 && !smaAligned && momentum20d < -2) {
+    trend = 'STRONG DOWNTREND'; trendStrength = 10;
+  } else if (aboveSMAs <= 1 && momentum20d < 0) {
+    trend = 'DOWNTREND'; trendStrength = 30;
+  } else {
+    trend = 'SIDEWAYS'; trendStrength = 50;
+  }
+
+  return { trend, trendStrength, aboveSMAs, smaAligned, momentum20d: parseFloat(momentum20d.toFixed(2)) };
+}
+
+function detectBreakout(bars, closes, resistance) {
+  if (!resistance || bars.length < 5) return { isBreakout: false };
+  const current = closes[closes.length - 1];
+  const prev5Closes = closes.slice(-6, -1);
+  const avgPrev = prev5Closes.reduce((s,v)=>s+v,0)/prev5Closes.length;
+
+  // Breakout: today's close above resistance, previous closes were below
+  const isBreakout = current > resistance && avgPrev < resistance;
+  const breakoutStrength = isBreakout
+    ? parseFloat(((current - resistance) / resistance * 100).toFixed(2))
+    : 0;
+
+  return { isBreakout, breakoutStrength };
+}
+
+// Master function: fetch 365 days and calculate everything
+async function getTechnicalAnalysis(ticker) {
+  const bars = await fetchPriceBars(ticker, 365);
+  if (!bars || bars.length < 20) {
+    return { available: false, reason: 'Insufficient price history' };
+  }
+
+  const closes  = bars.map(b => b.c);
+  const volumes = bars.map(b => b.v);
+  const current = closes[closes.length - 1];
+
+  // Core calculations
+  const sma20  = calcSMA(closes, 20);
+  const sma50  = calcSMA(closes, 50);
+  const sma200 = calcSMA(closes, 200);
+  const ema12  = calcEMA(closes, 12);
+  const ema26  = calcEMA(closes, 26);
+  const rsi    = calcRSI(closes, 14);
+  const { nearestSupport, nearestResistance, supportLevels, resistanceLevels } = calcSupportResistance(bars, 90);
+  const { trend, trendStrength, aboveSMAs, smaAligned, momentum20d } = detectTrend(bars, closes);
+
+  // 52-week metrics
+  const year52High = Math.max(...closes.slice(-252));
+  const year52Low  = Math.min(...closes.slice(-252));
+  const week52Position = year52High > year52Low
+    ? parseFloat(((current - year52Low) / (year52High - year52Low) * 100).toFixed(1))
+    : 50;
+
+  // Volume analysis
+  const avgVolume30d = volumes.slice(-30).reduce((s,v)=>s+v,0) / 30;
+  const todayVolume  = volumes[volumes.length - 1];
+  const relativeVolume = avgVolume30d > 0
+    ? parseFloat((todayVolume / avgVolume30d).toFixed(2))
+    : 1;
+
+  // Breakout detection
+  const { isBreakout, breakoutStrength } = detectBreakout(bars, closes, nearestResistance);
+
+  // RSI interpretation
+  let rsiLabel = 'Neutral';
+  if (rsi >= 70) rsiLabel = 'Overbought — caution';
+  else if (rsi >= 60) rsiLabel = 'Bullish momentum';
+  else if (rsi <= 30) rsiLabel = 'Oversold — potential reversal';
+  else if (rsi <= 40) rsiLabel = 'Bearish momentum';
+
+  // MACD signal
+  const macdLine = ema12 && ema26 ? ema12 - ema26 : null;
+  const macdSignal = macdLine !== null ? (macdLine > 0 ? 'Bullish' : 'Bearish') : null;
+
+  // Distance from key SMAs (%)
+  const distFrom50  = sma50  ? parseFloat(((current-sma50)/sma50*100).toFixed(2))  : null;
+  const distFrom200 = sma200 ? parseFloat(((current-sma200)/sma200*100).toFixed(2)) : null;
+
+  // Composite technical score (0-100)
+  let techScore = 50;
+  // Trend component (0-30 pts)
+  techScore += (trendStrength - 50) * 0.3;
+  // RSI component (-15 to +15 pts)
+  if (rsi) {
+    if (rsi >= 30 && rsi <= 60) techScore += 10;       // Healthy zone
+    else if (rsi > 60 && rsi < 70) techScore += 5;    // Strong but watch
+    else if (rsi >= 70) techScore -= 10;               // Overbought penalty
+    else if (rsi < 30) techScore += 15;               // Oversold bounce potential
+  }
+  // Volume confirmation (+10 if above average)
+  if (relativeVolume > 1.5) techScore += 10;
+  else if (relativeVolume > 1.2) techScore += 5;
+  // Breakout bonus (+10)
+  if (isBreakout) techScore += 10;
+  // Above all SMAs (+10)
+  if (aboveSMAs === 3) techScore += 8;
+  else if (aboveSMAs === 2) techScore += 4;
+  else if (aboveSMAs === 0) techScore -= 8;
+  // 52-week position
+  if (week52Position >= 80) techScore += 5;  // Near highs = strength
+  else if (week52Position <= 20) techScore -= 5;
+
+  techScore = Math.round(Math.min(99, Math.max(1, techScore)));
+
+  return {
+    available: true,
+    ticker,
+    barsAnalysed: bars.length,
+    current: parseFloat(current.toFixed(2)),
+
+    // Moving averages
+    sma20:  sma20  ? parseFloat(sma20.toFixed(2))  : null,
+    sma50:  sma50  ? parseFloat(sma50.toFixed(2))  : null,
+    sma200: sma200 ? parseFloat(sma200.toFixed(2)) : null,
+    aboveSMA20:  sma20  ? current > sma20  : null,
+    aboveSMA50:  sma50  ? current > sma50  : null,
+    aboveSMA200: sma200 ? current > sma200 : null,
+    distFrom50, distFrom200,
+
+    // Momentum
+    rsi, rsiLabel,
+    macdSignal,
+    momentum20d,
+
+    // Trend
+    trend, trendStrength, smaAligned,
+
+    // Levels
+    nearestSupport, nearestResistance,
+    supportLevels, resistanceLevels,
+    isBreakout, breakoutStrength,
+
+    // 52-week
+    year52High: parseFloat(year52High.toFixed(2)),
+    year52Low:  parseFloat(year52Low.toFixed(2)),
+    week52Position,
+
+    // Volume
+    avgVolume30d: Math.round(avgVolume30d),
+    relativeVolume,
+
+    // Summary score
+    technicalScore: techScore,
+
+    // Summary for Claude agents
+    summary: `Trend: ${trend}. RSI: ${rsi} (${rsiLabel}). Price vs SMAs: above ${aboveSMAs}/3. ` +
+      `52wk position: ${week52Position}% (High: $${year52High}, Low: $${year52Low}). ` +
+      `Support: $${nearestSupport||'—'}, Resistance: $${nearestResistance||'—'}. ` +
+      `Vol: ${relativeVolume}x avg. ${isBreakout?'⚡ BREAKOUT above $'+nearestResistance+'!':''} ` +
+      `Technical score: ${techScore}/100.`,
+  };
+}
+
 async function initFromDB() {
   if (!DB) { console.log('[AGENT] Supabase not configured — running in-memory only'); return; }
   try {
@@ -616,12 +899,18 @@ function getTradeDNASummary() {
 async function runMultiAgentAnalysis(signal) {
   const ticker=signal.ticker||signal.symbol;
   const ctx=`Stock: ${ticker}\nCatalyst: ${signal.catalyst||''}\nDetail: ${signal.detail||''}\nScore: ${signal.signalScore} Conf: ${signal.confidence}%\nThesis: ${signal.thesis||''}`;
+  // If we have technical data, pass it as context to agents
+  const techContext = signal.technicalAnalysis
+    ? `Technical context: ${signal.technicalAnalysis.summary}`
+    : '';
+
   const agents=[
-    {name:'Momentum',focus:'price momentum, volume, RSI, moving averages only'},
-    {name:'Earnings', focus:'EPS vs estimate, revenue, guidance, analyst revisions only'},
-    {name:'Macro',    focus:'Fed policy, sector rotation, economic cycle, macro risks only'},
-    {name:'Sentiment',focus:'social buzz, options flow, retail positioning only'},
-    {name:'Risk',     focus:'finding reasons NOT to trade — risks and red flags only'},
+    {name:'Momentum',  focus:'price momentum, volume, RSI, moving averages, trend strength only. '+techContext},
+    {name:'Earnings',  focus:'EPS vs estimate, revenue, guidance, analyst revisions only'},
+    {name:'Macro',     focus:'Fed policy, sector rotation, economic cycle, macro risks only'},
+    {name:'Sentiment', focus:'social buzz, options flow, retail positioning only'},
+    {name:'Technical', focus:'chart patterns, support/resistance, trend direction, RSI, SMA alignment, breakouts. Use this data: '+techContext},
+    {name:'Risk',      focus:'finding reasons NOT to trade — risks, red flags, overbought conditions only. '+techContext},
   ];
   const votes=await Promise.all(agents.map(async agent=>{
     try{
@@ -679,6 +968,8 @@ function buildConviction(signal, agentVotes) {
     agentVotes,
     historicalSimilarity: similarity,
     convictionRating,
+    technicalScore: signal.technicalAnalysis?.technicalScore || null,
+    technicalTrend: signal.technicalAnalysis?.trend || null,
   };
 }
 
@@ -878,7 +1169,36 @@ Return ONLY JSON.`;
     const newSignals=result.catalysts||[];
     for(let signal of newSignals){
       signal.riskScore=scoreRisk(signal);signal.riskLabel=getRiskLabel(signal.riskScore);signal.foundAt=new Date().toISOString();
-      log('CATALYST','🤖 Running 5-agent analysis for '+signal.ticker+'...');
+
+      // Fetch 365 days of technical data before agent analysis
+      log('CATALYST','📈 Fetching 365-day technical analysis for '+signal.ticker+'...');
+      const technicalAnalysis = await getTechnicalAnalysis(signal.ticker);
+      if (technicalAnalysis.available) {
+        signal.technicalAnalysis = technicalAnalysis;
+        // Adjust signal score based on technical confirmation
+        if (signal.signal === 'BUY') {
+          if (technicalAnalysis.trend === 'STRONG UPTREND') signal.signalScore = Math.min(99, signal.signalScore + 5);
+          if (technicalAnalysis.isBreakout) signal.signalScore = Math.min(99, signal.signalScore + 5);
+          if (technicalAnalysis.rsi >= 70) signal.signalScore = Math.max(0, signal.signalScore - 8); // Overbought penalty
+          if (technicalAnalysis.trend === 'STRONG DOWNTREND') signal.signalScore = Math.max(0, signal.signalScore - 10);
+        } else if (signal.signal === 'SHORT') {
+          if (technicalAnalysis.trend === 'STRONG DOWNTREND') signal.signalScore = Math.min(99, signal.signalScore + 5);
+          if (technicalAnalysis.rsi <= 30) signal.signalScore = Math.max(0, signal.signalScore - 8); // Oversold penalty for shorts
+        }
+        signal.riskScore = scoreRisk(signal); // Recalculate with technical data
+        log('CATALYST', '📈 '+signal.ticker+' technicals: '+technicalAnalysis.trend+
+          ' | RSI:'+technicalAnalysis.rsi+' | Score:'+technicalAnalysis.technicalScore+
+          '/100 | '+technicalAnalysis.week52Position+'% of 52wk range', {
+          ticker: signal.ticker,
+          trend: technicalAnalysis.trend,
+          rsi: technicalAnalysis.rsi,
+          technicalScore: technicalAnalysis.technicalScore,
+          week52Position: technicalAnalysis.week52Position,
+          isBreakout: technicalAnalysis.isBreakout,
+        });
+      }
+
+      log('CATALYST','🤖 Running 6-agent analysis for '+signal.ticker+'...');
       const agentVotes=await runMultiAgentAnalysis(signal);
       const conviction=buildConviction(signal,agentVotes);
       signal.conviction=conviction;
@@ -1022,11 +1342,12 @@ async function runEarningsPrePositioning() {
         const ticker = earning.ticker;
 
         // Get real data from Finnhub
-        const [ratings, insider, metrics, news] = await Promise.all([
+        const [ratings, insider, metrics, news, technicalAnalysis] = await Promise.all([
           getAnalystRatings(ticker),
           getInsiderActivity(ticker),
           getMetrics(ticker),
           getCompanyNews(ticker),
+          getTechnicalAnalysis(ticker),
         ]);
 
         // Build context from real data
@@ -1043,12 +1364,17 @@ async function runEarningsPrePositioning() {
           ? 'Recent headlines: ' + news.slice(0,2).map(n=>n.headline).join(' | ')
           : 'No recent news';
 
+        const techContext = technicalAnalysis?.available
+          ? `Technical setup: ${technicalAnalysis.summary}`
+          : 'No technical data';
+
         const prompt = `You are an earnings pre-positioning analyst. ${ticker} reports earnings ${earning.time==='bmo'?'before market open':'after market close'} on ${earning.date}.
 EPS estimate: $${earning.epsEstimate}${earning.revenueEstimate?' Revenue estimate: $'+Math.round(earning.revenueEstimate/1e6)+'M':''}
 ${analystContext}
 ${insiderContext}
 ${metricsContext}
 ${newsContext}
+${techContext}
 Based on this data, should we pre-position LONG (expecting beat), SHORT (expecting miss), or AVOID?
 Consider: analyst sentiment, insider activity, recent news tone, valuation.
 Return ONLY JSON:
@@ -1208,6 +1534,12 @@ app.post('/scan-now',(req,res)=>{res.json({message:'Catalyst scan triggered'});r
 app.post('/earnings-now',(req,res)=>{res.json({message:'Earnings scan triggered'});runEarningsPrePositioning();});
 app.get('/analytics',(req,res)=>res.json(getPerformanceAnalytics()||{}));
 app.get('/agent-stats',(req,res)=>getAgentStats().then(d=>res.json(d)).catch(()=>res.json([])));
+app.get('/technical/:ticker', async (req,res)=>{
+  try {
+    const analysis = await getTechnicalAnalysis(req.params.ticker);
+    res.json(analysis);
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
 app.get('/similarity/:ticker',(req,res)=>{
   const sig={ticker:req.params.ticker,catalyst:req.query.catalyst||'',signalScore:parseInt(req.query.score)||70,signal:req.query.signal||'BUY'};
   res.json(calculateHistoricalSimilarity(sig));

@@ -736,6 +736,55 @@ async function loadSignals() {
         ${votesHTML}
         ${s.entryLogic?`<div style="font-size:11px;color:var(--blue);margin-top:8px;font-style:italic">💡 ${s.entryLogic}</div>`:''}
         ${s.thesis?`<div style="font-size:11px;color:var(--text2);margin-top:6px">${s.thesis}</div>`:''}
+
+        ${s.technicalAnalysis&&s.technicalAnalysis.available?`
+        <div style="margin-top:12px;padding:14px;background:var(--card2);border-radius:12px;border:1px solid rgba(124,106,255,0.15)">
+          <div style="font-size:10px;font-weight:700;color:var(--purple2);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:10px">📈 Technical Analysis — 365 Days</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+            <div style="background:var(--card);border-radius:8px;padding:10px">
+              <div style="font-size:9px;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px">Trend</div>
+              <div style="font-size:14px;font-weight:800;margin-top:3px;color:${s.technicalAnalysis.trend.includes('UP')?'var(--green)':s.technicalAnalysis.trend.includes('DOWN')?'var(--red)':'var(--amber)'}">${s.technicalAnalysis.trend}</div>
+            </div>
+            <div style="background:var(--card);border-radius:8px;padding:10px">
+              <div style="font-size:9px;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px">RSI (14)</div>
+              <div style="font-size:14px;font-weight:800;margin-top:3px;color:${s.technicalAnalysis.rsi>=70?'var(--red)':s.technicalAnalysis.rsi<=30?'var(--green)':'var(--text)'}">${s.technicalAnalysis.rsi}</div>
+              <div style="font-size:10px;color:var(--text2)">${s.technicalAnalysis.rsiLabel}</div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px">
+            ${['sma20','sma50','sma200'].map(sma=>{
+              const period=sma.replace('sma','');
+              const val=s.technicalAnalysis[sma];
+              const above=s.technicalAnalysis['aboveSMA'+period];
+              return val?`<div style="background:var(--card);border-radius:8px;padding:8px;text-align:center">
+                <div style="font-size:9px;color:var(--text2)">SMA${period}</div>
+                <div style="font-size:12px;font-weight:700;color:${above?'var(--green)':'var(--red)'}">$${val}</div>
+                <div style="font-size:9px;color:${above?'var(--green)':'var(--red)'}">${above?'✓ Above':'✗ Below'}</div>
+              </div>`:'';
+            }).join('')}
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px">
+            <div style="background:var(--card);border-radius:8px;padding:8px;text-align:center">
+              <div style="font-size:9px;color:var(--text2)">52wk Position</div>
+              <div style="font-size:13px;font-weight:700;color:${s.technicalAnalysis.week52Position>=70?'var(--green)':s.technicalAnalysis.week52Position<=30?'var(--red)':'var(--amber)'}">${s.technicalAnalysis.week52Position}%</div>
+              <div style="font-size:9px;color:var(--text2)">H:$${s.technicalAnalysis.year52High} L:$${s.technicalAnalysis.year52Low}</div>
+            </div>
+            <div style="background:var(--card);border-radius:8px;padding:8px;text-align:center">
+              <div style="font-size:9px;color:var(--text2)">Support</div>
+              <div style="font-size:13px;font-weight:700;color:var(--green)">$${s.technicalAnalysis.nearestSupport||'—'}</div>
+            </div>
+            <div style="background:var(--card);border-radius:8px;padding:8px;text-align:center">
+              <div style="font-size:9px;color:var(--text2)">Resistance</div>
+              <div style="font-size:13px;font-weight:700;color:var(--red)">$${s.technicalAnalysis.nearestResistance||'—'}</div>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div style="font-size:11px;color:var(--text2)">Vol: <b style="color:${s.technicalAnalysis.relativeVolume>=1.5?'var(--green)':'var(--text)'}">${s.technicalAnalysis.relativeVolume}x</b> avg &nbsp;·&nbsp; ${s.technicalAnalysis.barsAnalysed} days analysed</div>
+            ${s.technicalAnalysis.isBreakout?`<span style="font-size:10px;font-weight:700;background:rgba(34,197,94,0.15);color:var(--green);padding:3px 8px;border-radius:4px">⚡ BREAKOUT +${s.technicalAnalysis.breakoutStrength}%</span>`:''}
+            <div style="display:flex;align-items:center;gap:6px"><div style="font-size:10px;color:var(--text2)">Tech Score</div><div style="font-size:14px;font-weight:800;color:${s.technicalAnalysis.technicalScore>=70?'var(--green)':s.technicalAnalysis.technicalScore>=50?'var(--amber)':'var(--red)'}">${s.technicalAnalysis.technicalScore}<span style="font-size:10px;font-weight:400;color:var(--text2)">/100</span></div></div>
+          </div>
+        </div>`:''}
+
         <div style="font-size:10px;color:var(--text3);margin-top:8px">Target: $${s.targetPrice} · Stop: $${s.stopLoss} · ${s.timeframe||''} · Found ${timeAgo(s.foundAt)}</div>
       </div>`;
     }).join(''));
