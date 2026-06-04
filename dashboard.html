@@ -289,6 +289,8 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
       <button class="nav-item" onclick="showPage('tradedna',this)"><span class="nav-icon">🧬</span>Trade DNA</button>
       <button class="nav-item" onclick="showPage('earnings',this)"><span class="nav-icon">📅</span>Earnings</button>
       <button class="nav-item" onclick="showPage('influencers',this)"><span class="nav-icon">⚡</span>Influencers</button>
+      <button class="nav-item" onclick="showPage('rankings',this)"><span class="nav-icon">🏆</span>Rankings</button>
+      <button class="nav-item" onclick="showPage('genome',this)"><span class="nav-icon">🧬</span>Strategy Genome</button>
     </nav>
     <div class="sidebar-bottom">
       <div class="system-status">
@@ -364,6 +366,21 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
           <div class="card card-sm"><div class="stat-mini"><div class="stat-mini-val" id="dash-signals" style="color:var(--amber)">0</div><div class="stat-mini-label">Active Signals</div></div></div>
           <div class="card card-sm"><div class="stat-mini"><div class="stat-mini-val" id="dash-winrate" style="color:var(--green)">—</div><div class="stat-mini-label">Win Rate</div></div></div>
         </div>
+        <!-- Market Regime Banner -->
+        <div id="regime-banner" style="display:none;margin-bottom:16px;padding:12px 18px;border-radius:12px;border:1px solid;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <div>
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;opacity:0.7;margin-bottom:3px">Market Regime</div>
+            <div style="font-size:16px;font-weight:800" id="regime-label">—</div>
+            <div style="font-size:11px;opacity:0.7;margin-top:2px" id="regime-desc">—</div>
+          </div>
+          <div style="display:flex;gap:16px;flex-wrap:wrap">
+            <div style="text-align:center"><div style="font-size:10px;opacity:0.7;text-transform:uppercase;letter-spacing:0.5px">Position Size</div><div style="font-size:18px;font-weight:800" id="regime-risk">—x</div></div>
+            <div style="text-align:center"><div style="font-size:10px;opacity:0.7;text-transform:uppercase;letter-spacing:0.5px">SPY 20d</div><div style="font-size:18px;font-weight:800" id="regime-spy">—</div></div>
+            <div style="text-align:center"><div style="font-size:10px;opacity:0.7;text-transform:uppercase;letter-spacing:0.5px">Est. VIX</div><div style="font-size:18px;font-weight:800" id="regime-vix">—</div></div>
+          </div>
+        </div>
+        <div style="display:none">
+        </div>
 
         <!-- Watchlist Table -->
         <div class="card">
@@ -398,6 +415,15 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
       <div id="page-portfolio" style="display:none" class="fade-up">
         <div class="page-header"><div><div class="page-greeting" style="font-size:20px">Portfolio</div><div class="page-sub">Open positions and performance</div></div></div>
         <div id="queue-wrap-port" style="display:none" class="queue-card-wrap"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span style="font-size:12px;font-weight:700;color:var(--amber)">⏳ <span id="queue-count-p">0</span> Queued for Market Open</span><button onclick="clearQueue()" style="background:rgba(255,255,255,0.06);color:var(--text2);border:1px solid var(--border);padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;font-family:inherit">Clear</button></div><div id="queue-list-p"></div></div>
+        <!-- Portfolio Concentration Card -->
+        <div class="card" style="margin-bottom:14px" id="concentration-card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+            <div class="card-title" style="margin-bottom:0">🎯 Portfolio Concentration Analysis</div>
+            <button onclick="loadConcentration()" style="background:var(--card2);color:var(--text2);border:1px solid var(--border);padding:5px 12px;border-radius:6px;font-size:12px;cursor:pointer;font-family:inherit">↻</button>
+          </div>
+          <div id="concentration-content"><div style="color:var(--text3);font-size:12px">Loading...</div></div>
+        </div>
+
         <!-- Short Diagnostics Card -->
         <div class="card" style="margin-bottom:14px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
@@ -462,6 +488,26 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
         <div class="page-header"><div><div class="page-greeting" style="font-size:20px">Earnings Calendar</div><div class="page-sub">Upcoming reports with pre-positioning signals</div></div>
         <button onclick="triggerEarnings()" style="background:rgba(34,197,94,0.1);color:var(--green);border:1px solid rgba(34,197,94,0.25);padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">📅 Pre-Position Now</button></div>
         <div class="card"><div id="earnings-list"><div class="empty"><div class="empty-icon">📅</div><div class="empty-title">No earnings data yet</div>Tap Pre-Position Now to scan Finnhub</div></div></div>
+      </div>
+
+      <!-- ═══ RANKINGS PAGE ═══ -->
+      <div id="page-rankings" style="display:none" class="fade-up">
+        <div class="page-header"><div><div class="page-greeting" style="font-size:20px">Opportunity Rankings</div><div class="page-sub">All signals ranked by composite conviction score</div></div>
+        <button onclick="loadRankings()" style="background:var(--purple-bg);color:var(--purple2);border:1px solid rgba(124,106,255,0.3);padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">↻ Refresh</button></div>
+        <div class="card">
+          <table class="table">
+            <thead><tr><th>Rank</th><th>Ticker</th><th>Signal</th><th>Rank Score</th><th>Conviction</th><th>Expected Return</th><th>Tech Score</th><th>Risk</th></tr></thead>
+            <tbody id="rankings-table"><tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text3)">Run a scan to generate rankings</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ═══ STRATEGY GENOME PAGE ═══ -->
+      <div id="page-genome" style="display:none" class="fade-up">
+        <div class="page-header"><div><div class="page-greeting" style="font-size:20px">Strategy Genome</div><div class="page-sub">Recurring profitable patterns discovered from trade history</div></div></div>
+        <div id="genome-content" class="card">
+          <div class="empty"><div class="empty-icon">🧬</div><div class="empty-title">Building genome...</div>Need 5+ completed trades to identify patterns</div>
+        </div>
       </div>
 
       <!-- ═══ INFLUENCERS PAGE ═══ -->
@@ -1089,6 +1135,138 @@ async function clearQueue() {
 }
 
 // ── LOAD ALL ──────────────────────────────────────────────────────
+async function loadRegime() {
+  try {
+    const r = await fetch(`${BASE}/regime`).then(d=>d.json());
+    if (!r || r.regime === 'UNKNOWN') return;
+    const banner = document.getElementById('regime-banner');
+    if (banner) {
+      banner.style.display = 'flex';
+      const colors = {
+        BULL:'rgba(34,197,94,0.1)', RISK_ON:'rgba(34,197,94,0.08)',
+        NEUTRAL:'rgba(255,255,255,0.04)', SIDEWAYS:'rgba(245,158,11,0.08)',
+        CORRECTION:'rgba(239,68,68,0.08)', RISK_OFF:'rgba(239,68,68,0.1)', BEAR:'rgba(239,68,68,0.15)',
+      };
+      const borderColors = {
+        BULL:'rgba(34,197,94,0.3)', RISK_ON:'rgba(34,197,94,0.2)',
+        NEUTRAL:'rgba(255,255,255,0.08)', SIDEWAYS:'rgba(245,158,11,0.2)',
+        CORRECTION:'rgba(239,68,68,0.2)', RISK_OFF:'rgba(239,68,68,0.25)', BEAR:'rgba(239,68,68,0.4)',
+      };
+      const textColors = {
+        BULL:'var(--green)', RISK_ON:'var(--green)', NEUTRAL:'var(--text2)',
+        SIDEWAYS:'var(--amber)', CORRECTION:'var(--amber)', RISK_OFF:'var(--red)', BEAR:'var(--red)',
+      };
+      banner.style.background = colors[r.regime] || 'rgba(255,255,255,0.04)';
+      banner.style.borderColor = borderColors[r.regime] || 'var(--border)';
+      banner.style.color = textColors[r.regime] || 'var(--text)';
+      setEl('regime-label', r.label||'');
+      setEl('regime-desc', r.description||'');
+      setEl('regime-risk', (r.riskMultiplier||1).toFixed(2)+'x');
+      const m = r.metrics||{};
+      const spy = document.getElementById('regime-spy');
+      if(spy){spy.textContent=(m.spy20dChange>=0?'+':'')+m.spy20dChange+'%';spy.style.color=m.spy20dChange>=0?'var(--green)':'var(--red)';}
+      setEl('regime-vix', m.estimatedVix||'—');
+    }
+  } catch(e){}
+}
+
+async function loadRankings() {
+  try {
+    const items = await fetch(`${BASE}/rankings`).then(r=>r.json());
+    const tbody = document.getElementById('rankings-table');
+    if (!items||!items.length){
+      if(tbody)tbody.innerHTML='<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text3)">No signals to rank — run a scan</td></tr>';
+      return;
+    }
+    if(tbody) tbody.innerHTML = items.map(s=>{
+      const color = logoColor(s.ticker||'');
+      const isCrypto = s.isCrypto||(s.symbol&&s.symbol.includes('/'));
+      const isShort = s.signal==='SHORT';
+      const techScore = s.technicalAnalysis?.technicalScore;
+      const conv = s.conviction||{};
+      const convRating = conv.convictionRating||(s.signalScore>=80?'Very High':s.signalScore>=70?'High':'Medium');
+      const rankColor = s.rank<=3?'var(--amber)':s.rank<=10?'var(--purple2)':'var(--text2)';
+      return `<tr>
+        <td><span style="font-size:18px;font-weight:800;color:${rankColor}">#${s.rank}</span></td>
+        <td><div class="ticker-cell">
+          <div class="ticker-logo" style="background:${color}22;color:${color}">${(s.ticker||'').substring(0,2)}</div>
+          <div><div class="ticker-name">${s.ticker}</div><div style="font-size:10px;color:var(--text2)">${isCrypto?'Crypto':isShort?'Short':'Stock'}</div></div>
+        </div></td>
+        <td>${signalBadgeHTML(s.signal)}</td>
+        <td><span style="font-size:16px;font-weight:800;color:var(--purple2)">${s.rankScore}</span><span style="font-size:10px;color:var(--text3)">/99</span></td>
+        <td>${convictionPill(convRating, s.signalScore)}</td>
+        <td style="color:${isShort?'var(--red)':'var(--green)'};font-weight:700">${s.expectedReturn||conv.expectedReturn||'—'}</td>
+        <td>${techScore?`<span style="font-weight:700;color:${techScore>=70?'var(--green)':techScore>=50?'var(--amber)':'var(--red)'}">${techScore}</span><span style="font-size:10px;color:var(--text3)">/100</span>`:'—'}</td>
+        <td>${riskPill(s.riskScore||0)}</td>
+      </tr>`;
+    }).join('');
+  } catch(e){}
+}
+
+async function loadGenome() {
+  try {
+    const g = await fetch(`${BASE}/genome`).then(r=>r.json());
+    const el = document.getElementById('genome-content');
+    if (!el) return;
+    if (!g.hasPatterns) {
+      el.innerHTML = `<div class="empty"><div class="empty-icon">🧬</div><div class="empty-title">${g.message||'Building genome...'}</div><div style="margin-top:6px;font-size:12px;color:var(--text2)">Currently analysed: ${g.tradesAnalysed||0} trades. Patterns emerge at 5+ trades.</div></div>`;
+      return;
+    }
+    el.innerHTML = `
+      <div style="margin-bottom:16px;padding:14px;background:linear-gradient(135deg,rgba(124,106,255,0.1),rgba(59,130,246,0.05));border-radius:12px;border:1px solid rgba(124,106,255,0.2)">
+        <div style="font-size:10px;font-weight:700;color:var(--purple2);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">🧬 Top Pattern Discovered</div>
+        <div style="font-size:14px;font-weight:700;color:var(--text)">${g.insight}</div>
+        <div style="font-size:11px;color:var(--text2);margin-top:4px">Based on ${g.tradesAnalysed} trades · ${g.patternCount} patterns found</div>
+      </div>
+      ${g.patterns.map((p,i)=>`
+        <div style="padding:14px;background:var(--card2);border-radius:12px;margin-bottom:8px;border-left:3px solid ${p.winRate>=70?'var(--green)':p.winRate>=50?'var(--amber)':'var(--red)'}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+            <div>
+              <div style="font-size:12px;font-weight:800;color:var(--purple2)">Pattern #${p.id}</div>
+              <div style="font-size:14px;font-weight:600;color:var(--text);margin-top:2px">${p.description}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0;margin-left:12px">
+              <div style="font-size:20px;font-weight:800;color:${p.winRate>=70?'var(--green)':p.winRate>=50?'var(--amber)':'var(--red)'}">${p.winRate}%</div>
+              <div style="font-size:10px;color:var(--text2)">win rate</div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+            <div style="background:var(--card);border-radius:7px;padding:7px;text-align:center"><div style="font-size:9px;color:var(--text2)">Occurrences</div><div style="font-size:14px;font-weight:700">${p.occurrences}</div></div>
+            <div style="background:var(--card);border-radius:7px;padding:7px;text-align:center"><div style="font-size:9px;color:var(--text2)">Avg Return</div><div style="font-size:14px;font-weight:700;color:${p.avgReturn>=0?'var(--green)':'var(--red)'}">${p.avgReturn>=0?'+':''}${p.avgReturn}%</div></div>
+            <div style="background:var(--card);border-radius:7px;padding:7px;text-align:center"><div style="font-size:9px;color:var(--text2)">Best</div><div style="font-size:14px;font-weight:700;color:var(--green)">+${p.bestReturn}%</div></div>
+            <div style="background:var(--card);border-radius:7px;padding:7px;text-align:center"><div style="font-size:9px;color:var(--text2)">Worst</div><div style="font-size:14px;font-weight:700;color:var(--red)">${p.worstReturn}%</div></div>
+          </div>
+        </div>`).join('')}`;
+  } catch(e){}
+}
+
+async function loadConcentration() {
+  try {
+    const data = await fetch(`${BASE}/portfolio-risk`).then(r=>r.json());
+    const el = document.getElementById('concentration-content');
+    if (!el) return;
+    if (!data.hasPositions) {
+      el.innerHTML = '<div style="color:var(--text3);font-size:12px">No open positions to analyse</div>';
+      return;
+    }
+    const ratingColor = data.diversificationRating.includes('HIGH')?'var(--red)':data.diversificationRating.includes('Concentrated')?'var(--amber)':data.diversificationRating.includes('Moderate')?'var(--amber)':'var(--green)';
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div><div style="font-size:12px;color:var(--text2)">Invested: <b style="color:var(--text)">${data.investedPct}% of portfolio</b></div><div style="font-size:12px;color:var(--text2);margin-top:2px">${data.positionCount} positions</div></div>
+        <div style="text-align:right"><div style="font-size:11px;font-weight:700;color:${ratingColor};background:${ratingColor}18;padding:3px 10px;border-radius:5px">${data.diversificationRating}</div></div>
+      </div>
+      ${data.risks.length?`<div style="margin-bottom:12px">${data.risks.map(r=>`<div style="font-size:12px;padding:7px 10px;background:var(--red-bg);border-radius:7px;margin-bottom:5px;color:var(--red)">${r}</div>`).join('')}</div>`:''}
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${data.sectors.map(s=>`
+          <div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="font-size:12px;font-weight:600">${s.name}</span><span style="font-size:12px;font-weight:700;color:${s.pct>=40?'var(--red)':s.pct>=25?'var(--amber)':'var(--text)'}">${s.pct}%</span></div>
+            <div style="height:5px;background:rgba(255,255,255,0.06);border-radius:3px"><div style="height:100%;width:${Math.min(100,s.pct)}%;border-radius:3px;background:${s.pct>=40?'var(--red)':s.pct>=25?'var(--amber)':'var(--purple)'}"></div></div>
+            <div style="font-size:10px;color:var(--text3);margin-top:2px">${s.tickers.join(', ')}</div>
+          </div>`).join('')}
+      </div>`;
+  } catch(e){}
+}
+
 async function loadShorts() {
   try {
     const data = await fetch(`${BASE}/shorts`).then(r=>r.json());
@@ -1173,7 +1351,7 @@ async function loadAll() {
     loadAccount(), loadStatus(), loadSignals(), loadPositions(),
     loadLog(), loadBriefing(), loadAnalytics(), loadDNA(),
     loadWatchlists(), loadEarnings(), loadInfluencers(), loadPending(),
-    loadShorts(),
+    loadShorts(), loadRegime(), loadRankings(), loadGenome(), loadConcentration(),
   ]);
 }
 

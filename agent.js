@@ -537,6 +537,354 @@ async function getTechnicalAnalysis(ticker) {
   };
 }
 
+// ── MARKET REGIME ENGINE ─────────────────────────────────────────
+// Detects current market regime from real data: VIX, SPY trend,
+// sector rotation, momentum. Adjusts all trading behaviour accordingly.
+
+let currentRegime = {
+  regime: 'UNKNOWN',
+  label: 'Determining...',
+  riskMultiplier: 1.0,    // Multiply position sizes
+  stopMultiplier: 1.0,    // Multiply stop loss distances
+  holdMultiplier: 1.0,    // Multiply target holds
+  lastUpdated: null,
+};
+
+async function detectMarketRegime() {
+  try {
+    // Fetch SPY, QQQ, VIX bars from Alpaca (free — already connected)
+    const [spyBars, vixBars] = await Promise.all([
+      fetchPriceBars('SPY', 60),
+      fetchPriceBars('VIXY', 60), // VIX proxy ETF
+    ]);
+
+    if (!spyBars || spyBars.length < 20) {
+      log('REGIME', '⚠️ Insufficient data for regime detection');
+      return currentRegime;
+    }
+
+    const spyCloses  = spyBars.map(b => b.c);
+    const spyCurrent = spyCloses[spyCloses.length - 1];
+    const spySMA20   = calcSMA(spyCloses, 20);
+    const spySMA50   = calcSMA(spyCloses, 50);
+    const spyRSI     = calcRSI(spyCloses, 14);
+    const spy20dChg  = spyCloses.length >= 20
+      ? (spyCurrent - spyCloses[spyCloses.length - 20]) / spyCloses[spyCloses.length - 20] * 100
+      : 0;
+    const spy5dChg   = spyCloses.length >= 5
+      ? (spyCurrent - spyCloses[spyCloses.length - 5]) / spyCloses[spyCloses.length - 5] * 100
+      : 0;
+
+    // VIX level (use VIXY as proxy, or default to moderate)
+    let vixLevel = 20; // Default moderate
+    if (vixBars && vixBars.length > 0) {
+      const vixCloses = vixBars.map(b => b.c);
+      vixLevel = vixCloses[vixCloses.length - 1] * 10; // VIXY ~= VIX/10
+    }
+
+    // Trend strength indicators
+    const aboveSMA20 = spySMA20 && spyCurrent > spySMA20;
+    const aboveSMA50 = spySMA50 && spyCurrent > spySMA50;
+    const bullishMomentum = spy20dChg > 3;
+    const bearishMomentum = spy20dChg < -3;
+    const highVol = vixLevel > 25;
+    const extremeVol = vixLevel > 35;
+    const lowVol = vixLevel < 15;
+
+    // Classify regime
+    let regime, label, riskMult, stopMult, holdMult, description;
+
+    if (extremeVol || (bearishMomentum && !aboveSMA20 && !aboveSMA50)) {
+      regime = 'BEAR';
+      label = 'Bear Market / High Fear';
+      riskMult = 0.4;  // 40% position sizes
+      stopMult = 0.7;  // Tighter stops
+      holdMult = 0.6;
+      description = 'High volatility, downtrend. Reduce exposure significantly. Favour shorts and defensive positions.';
+    } else if (highVol && bearishMomentum) {
+      regime = 'RISK_OFF';
+      label = 'Risk-Off / Elevated Fear';
+      riskMult = 0.6;
+      stopMult = 0.8;
+      holdMult = 0.7;
+      description = 'Elevated volatility, negative momentum. Reduce position sizes, tighter stops, prefer quality.';
+    } else if (!aboveSMA20 && spy20dChg < 0) {
+      regime = 'CORRECTION';
+      label = 'Market Correction';
+      riskMult = 0.75;
+      stopMult = 0.85;
+      holdMult = 0.8;
+      description = 'Below key moving averages. Cautious positioning. Wait for confirmation before entering longs.';
+    } else if (aboveSMA20 && aboveSMA50 && !bullishMomentum && !highVol) {
+      regime = 'SIDEWAYS';
+      label = 'Sideways / Consolidation';
+      riskMult = 0.85;
+      stopMult = 1.0;
+      holdMult = 0.9;
+      description = 'Range-bound market. Standard positioning. Favour mean-reversion plays over momentum.';
+    } else if (aboveSMA20 && aboveSMA50 && bullishMomentum && !highVol) {
+      regime = 'RISK_ON';
+      label = 'Risk-On / Bull Trend';
+      riskMult = 1.1;
+      stopMult = 1.1;  // Slightly wider stops — give winners room
+      holdMult = 1.2;
+      description = 'Strong uptrend, low volatility. Increase exposure. Favour momentum and growth.';
+    } else if (aboveSMA20 && aboveSMA50 && bullishMomentum && lowVol && spy20dChg > 6) {
+      regime = 'BULL';
+      label = 'Bull Market / Strong Trend';
+      riskMult = 1.25;
+      stopMult = 1.2;
+      holdMult = 1.5;
+      description = 'Strong bull trend, low volatility. Maximum exposure. Let winners run.';
+    } else {
+      regime = 'NEUTRAL';
+      label = 'Neutral / Mixed Signals';
+      riskMult = 1.0;
+      stopMult = 1.0;
+      holdMult = 1.0;
+      description = 'Mixed signals. Standard positioning. Follow individual signal quality.';
+    }
+
+    currentRegime = {
+      regime, label, riskMultiplier: riskMult,
+      stopMultiplier: stopMult, holdMultiplier: holdMult,
+      description, lastUpdated: new Date().toISOString(),
+      metrics: {
+        spyPrice: parseFloat(spyCurrent.toFixed(2)),
+        spy20dChange: parseFloat(spy20dChg.toFixed(2)),
+        spy5dChange: parseFloat(spy5dChg.toFixed(2)),
+        spyRSI: spyRSI,
+        aboveSMA20, aboveSMA50,
+        estimatedVix: parseFloat(vixLevel.toFixed(1)),
+      },
+    };
+
+    log('REGIME', '🌍 Market Regime: '+label+' | Risk multiplier: '+riskMult+'x | '+description, {
+      regime, riskMultiplier: riskMult,
+      spy20dChange: spy20dChg.toFixed(2)+'%',
+      aboveSMA20, aboveSMA50,
+    });
+
+    return currentRegime;
+  } catch(e) {
+    log('ERROR', 'Regime detection failed: '+e.message);
+    return currentRegime;
+  }
+}
+
+// Apply regime to position sizing
+function regimeAdjustedDollars(baseDollars) {
+  return baseDollars * currentRegime.riskMultiplier;
+}
+
+// ── OPPORTUNITY RANKING ENGINE ────────────────────────────────────
+// Ranks all active signals by a composite conviction score
+function rankOpportunities() {
+  const allSignals = [...catalystSignals, ...cryptoSignals.map(s=>({...s,ticker:s.symbol}))];
+  if (!allSignals.length) return [];
+
+  return allSignals
+    .map(signal => {
+      const conv = signal.conviction || {};
+      const tech = signal.technicalAnalysis || {};
+      const hs   = conv.historicalSimilarity || {};
+
+      // Composite rank score (0-100)
+      let rankScore = 0;
+      // Signal score (30%)
+      rankScore += (signal.signalScore || 0) * 0.30;
+      // Probability from conviction (25%)
+      rankScore += (conv.probability || 50) * 0.25;
+      // Agent consensus (20%)
+      rankScore += (conv.agentConsensus || 50) * 0.20;
+      // Technical score (15%)
+      rankScore += (tech.technicalScore || 50) * 0.15;
+      // Historical win rate (10%)
+      rankScore += (hs.hasSimilarity ? hs.winRate : 50) * 0.10;
+      // Regime adjustment
+      rankScore *= currentRegime.riskMultiplier;
+      // Risk penalty
+      rankScore -= (signal.riskScore || 0) * 0.15;
+
+      return {
+        ...signal,
+        rankScore: Math.round(Math.min(99, Math.max(1, rankScore))),
+        conviction: conv,
+      };
+    })
+    .sort((a, b) => b.rankScore - a.rankScore)
+    .map((signal, idx) => ({ ...signal, rank: idx + 1 }));
+}
+
+// ── PORTFOLIO CONCENTRATION ANALYZER ─────────────────────────────
+// Detects sector concentration, correlation risk, over-exposure
+const SECTOR_MAP = {
+  // Tech
+  NVDA:'AI/Tech', AMD:'AI/Tech', MSFT:'AI/Tech', AAPL:'AI/Tech', GOOGL:'AI/Tech',
+  META:'AI/Tech', AMZN:'AI/Tech', CRM:'AI/Tech', ORCL:'AI/Tech', SMCI:'AI/Tech',
+  // Finance
+  JPM:'Financials', BAC:'Financials', GS:'Financials', MS:'Financials', WFC:'Financials',
+  // Energy
+  XOM:'Energy', CVX:'Energy', SLB:'Energy', COP:'Energy',
+  // Healthcare
+  JNJ:'Healthcare', PFE:'Healthcare', UNH:'Healthcare', ABBV:'Healthcare',
+  // Crypto
+  'BTC/USD':'Crypto', 'ETH/USD':'Crypto', 'SOL/USD':'Crypto', 'AVAX/USD':'Crypto',
+  'LINK/USD':'Crypto', 'DOGE/USD':'Crypto',
+  // Industrials
+  BA:'Industrials', CAT:'Industrials', GE:'Industrials', LMT:'Industrials',
+  // Consumer
+  WMT:'Consumer', COST:'Consumer', TGT:'Consumer', AMZN:'Consumer',
+};
+
+async function analyzePortfolioConcentration() {
+  try {
+    const positions = await alpaca('/v2/positions');
+    if (!Array.isArray(positions) || !positions.length) {
+      return { hasPositions: false, message: 'No open positions' };
+    }
+
+    const account = await alpaca('/v2/account');
+    const portfolio = parseFloat(account.portfolio_value || 100000);
+
+    // Calculate sector exposure
+    const sectorExposure = {};
+    let totalInvested = 0;
+
+    positions.forEach(p => {
+      const mv = Math.abs(parseFloat(p.market_value || 0));
+      const sector = SECTOR_MAP[p.symbol] || 'Other';
+      totalInvested += mv;
+      if (!sectorExposure[sector]) sectorExposure[sector] = { value: 0, tickers: [], pct: 0 };
+      sectorExposure[sector].value += mv;
+      sectorExposure[sector].tickers.push(p.symbol);
+    });
+
+    // Calculate percentages
+    Object.keys(sectorExposure).forEach(sector => {
+      sectorExposure[sector].pct = parseFloat((sectorExposure[sector].value / portfolio * 100).toFixed(1));
+    });
+
+    // Sort by exposure
+    const sectors = Object.entries(sectorExposure)
+      .sort((a, b) => b[1].pct - a[1].pct)
+      .map(([name, data]) => ({ name, ...data }));
+
+    // Identify risks
+    const risks = [];
+    sectors.forEach(s => {
+      if (s.pct >= 40) risks.push(`⚠️ HIGH: ${s.pct}% in ${s.name} (${s.tickers.join(', ')}) — dangerously concentrated`);
+      else if (s.pct >= 25) risks.push(`⚡ MODERATE: ${s.pct}% in ${s.name} — consider reducing`);
+    });
+
+    const concentrationScore = sectors.length > 0 ? sectors[0].pct : 0; // Higher = more concentrated = riskier
+
+    return {
+      hasPositions: true,
+      portfolio, totalInvested,
+      investedPct: parseFloat((totalInvested / portfolio * 100).toFixed(1)),
+      sectors,
+      risks,
+      concentrationScore,
+      diversificationRating: concentrationScore < 20 ? 'Well Diversified' : concentrationScore < 35 ? 'Moderate' : concentrationScore < 50 ? 'Concentrated' : 'HIGH RISK — Overconcentrated',
+      positionCount: positions.length,
+    };
+  } catch(e) {
+    return { hasPositions: false, error: e.message };
+  }
+}
+
+// ── STRATEGY GENOME ENGINE ────────────────────────────────────────
+// Identifies recurring profitable patterns from Trade DNA.
+// Grows more powerful with every trade the system makes.
+
+function buildStrategyGenome() {
+  if (tradeDNA.length < 5) {
+    return {
+      hasPatterns: false,
+      message: 'Need more trades to identify patterns (currently '+tradeDNA.length+'/20 minimum)',
+      patterns: [],
+    };
+  }
+
+  const patterns = {};
+
+  tradeDNA.forEach(trade => {
+    // Build pattern fingerprint from the trade's characteristics
+    const catalystType = classifyCatalyst(trade.catalyst || '');
+    const scoreRange   = trade.signalScore >= 85 ? 'HIGH' : trade.signalScore >= 72 ? 'MED' : 'LOW';
+    const rsiZone      = trade.factorBreakdown?.technicalFactor >= 75 ? 'BULLISH_TECH'
+                       : trade.factorBreakdown?.technicalFactor <= 40 ? 'BEARISH_TECH' : 'NEUTRAL_TECH';
+    const insiderSignal = trade.factorBreakdown?.insiderFactor >= 70 ? 'INSIDER_BUY' : 'NO_INSIDER';
+
+    const key = [catalystType, scoreRange, rsiZone, insiderSignal].join('|');
+
+    if (!patterns[key]) {
+      patterns[key] = {
+        id: Object.keys(patterns).length + 1,
+        catalystType, scoreRange, rsiZone, insiderSignal,
+        trades: [], wins: 0, totalReturn: 0,
+      };
+    }
+
+    patterns[key].trades.push(trade);
+    if (trade.profitable) patterns[key].wins++;
+    patterns[key].totalReturn += trade.returnPct || 0;
+  });
+
+  // Only return patterns with 2+ occurrences
+  const validPatterns = Object.values(patterns)
+    .filter(p => p.trades.length >= 2)
+    .map(p => ({
+      id: p.id,
+      description: formatPatternDescription(p),
+      occurrences: p.trades.length,
+      winRate: Math.round(p.wins / p.trades.length * 100),
+      avgReturn: parseFloat((p.totalReturn / p.trades.length).toFixed(2)),
+      bestReturn: parseFloat(Math.max(...p.trades.map(t => t.returnPct || 0)).toFixed(2)),
+      worstReturn: parseFloat(Math.min(...p.trades.map(t => t.returnPct || 0)).toFixed(2)),
+      catalystType: p.catalystType,
+      scoreRange: p.scoreRange,
+    }))
+    .sort((a, b) => (b.winRate * b.occurrences) - (a.winRate * a.occurrences));
+
+  const topPattern = validPatterns[0];
+
+  return {
+    hasPatterns: validPatterns.length > 0,
+    patternCount: validPatterns.length,
+    tradesAnalysed: tradeDNA.length,
+    bestPattern: topPattern || null,
+    patterns: validPatterns.slice(0, 10),
+    insight: topPattern
+      ? `Best pattern: ${topPattern.description} — ${topPattern.occurrences} occurrences, ${topPattern.winRate}% win rate, avg ${topPattern.avgReturn >= 0 ? '+' : ''}${topPattern.avgReturn}%`
+      : 'No clear patterns yet — keep trading to build the genome.',
+  };
+}
+
+function classifyCatalyst(catalyst) {
+  const c = catalyst.toLowerCase();
+  if (c.includes('earnings beat') || c.includes('eps beat')) return 'EARNINGS_BEAT';
+  if (c.includes('earnings miss') || c.includes('eps miss')) return 'EARNINGS_MISS';
+  if (c.includes('analyst upgrade')) return 'ANALYST_UPGRADE';
+  if (c.includes('insider buy')) return 'INSIDER_BUY';
+  if (c.includes('influencer')) return 'INFLUENCER';
+  if (c.includes('breakout')) return 'BREAKOUT';
+  if (c.includes('short squeeze')) return 'SHORT_SQUEEZE';
+  if (c.includes('crypto') || c.includes('btc') || c.includes('eth')) return 'CRYPTO';
+  return 'OTHER';
+}
+
+function formatPatternDescription(p) {
+  const parts = [];
+  if (p.catalystType !== 'OTHER') parts.push(p.catalystType.replace(/_/g, ' '));
+  if (p.scoreRange === 'HIGH') parts.push('High conviction (85+)');
+  else if (p.scoreRange === 'MED') parts.push('Medium conviction (72-84)');
+  if (p.rsiZone === 'BULLISH_TECH') parts.push('Strong technicals');
+  if (p.insiderSignal === 'INSIDER_BUY') parts.push('Insider buying');
+  return parts.join(' + ') || 'Mixed signals';
+}
+
 async function initFromDB() {
   if (!DB) { console.log('[AGENT] Supabase not configured — running in-memory only'); return; }
   try {
@@ -1012,12 +1360,16 @@ function buildConviction(signal, agentVotes) {
 
 // ── POSITION SIZING ───────────────────────────────────────────────
 function positionDollars(portfolio, score, confidence) {
-  const c=score*0.6+confidence*0.4;
-  if(c>=85) return portfolio*0.08;
-  if(c>=78) return portfolio*0.06;
-  if(c>=72) return portfolio*0.04;
-  if(c>=65) return portfolio*0.02;
-  return 0;
+  const c = score*0.6 + confidence*0.4;
+  let base = 0;
+  if(c>=85) base = portfolio*0.08;
+  else if(c>=78) base = portfolio*0.06;
+  else if(c>=72) base = portfolio*0.04;
+  else if(c>=65) base = portfolio*0.02;
+  else return 0;
+  // Apply market regime multiplier — smaller in bear, larger in bull
+  const adjusted = base * (currentRegime.riskMultiplier || 1.0);
+  return Math.min(adjusted, portfolio * 0.12); // Cap at 12% regardless
 }
 
 // ── PLACE ORDER ───────────────────────────────────────────────────
@@ -1120,8 +1472,12 @@ async function runMorningBriefing() {
   const analyticsContext = analytics
     ? `Portfolio stats: ${analytics.totalTrades} trades, ${analytics.winRate}% win rate, avg return ${analytics.avgReturn}%`
     : 'No trade history yet';
+  const regimeContext = currentRegime.regime !== 'UNKNOWN'
+    ? `Current market regime: ${currentRegime.label}. Risk multiplier: ${currentRegime.riskMultiplier}x. ${currentRegime.description}`
+    : '';
+  const genomeContext = buildStrategyGenome().insight || '';
 
-  const prompt=`You are an AI Chief Investment Officer. Search overnight news and futures. Context: ${dna}. ${analyticsContext}
+  const prompt=`You are an AI Chief Investment Officer. Market regime: ${regimeContext}. Strategy genome: ${genomeContext}. Search overnight news and futures. Context: ${dna}. ${analyticsContext}
 Generate an institutional morning briefing. Respond with ONLY JSON:
 {"greeting":"Good morning. [Key overnight development in one sentence]","portfolioRiskScore":65,"marketRegime":"RISK_ON","futuresSnapshot":"Brief futures","topWatches":[{"ticker":"NVDA","reason":"Why today","bias":"BULLISH","expectedMove":"+2%"}],"sectorFocus":"Which sector and why","keyRisk":"Biggest risk","recommendedActions":["Action 1","Action 2"],"topIdea":{"ticker":"AAPL","catalyst":"Why best trade","action":"BUY","confidence":78}}
 All strings under 100 chars. Return ONLY JSON.`;
@@ -1545,7 +1901,8 @@ function minsSince(iso){return iso?(Date.now()-new Date(iso).getTime())/60000:99
 async function scheduler() {
   if(!['IDLE','MARKET_CLOSED'].includes(state.status)) return;
   const{hhmm,isMarket}=getETTime();
-  if(hhmm==='09:00'){await runMorningBriefing();return;}
+  if(hhmm==='09:00'){await detectMarketRegime();await runMorningBriefing();return;}
+  if(hhmm==='12:00'){await detectMarketRegime();return;} // Midday regime check
   if(hhmm==='15:30'){await runPreCloseBriefing();return;}
   if(hhmm==='18:00'){await runEarningsPrePositioning();return;}
   if(minsSince(state.lastCrypto)>=CRYPTO_INTERVAL){await runCryptoScan();return;}
@@ -1582,6 +1939,13 @@ app.post('/scan-now',(req,res)=>{res.json({message:'Catalyst scan triggered'});r
 app.post('/earnings-now',(req,res)=>{res.json({message:'Earnings scan triggered'});runEarningsPrePositioning();});
 app.get('/analytics',(req,res)=>res.json(getPerformanceAnalytics()||{}));
 app.get('/agent-stats',(req,res)=>getAgentStats().then(d=>res.json(d)).catch(()=>res.json([])));
+app.get('/regime',      (req, res) => res.json(currentRegime));
+app.get('/rankings',    (req, res) => res.json(rankOpportunities()));
+app.get('/genome',      (req, res) => res.json(buildStrategyGenome()));
+app.get('/portfolio-risk', async (req, res) => {
+  try { res.json(await analyzePortfolioConcentration()); }
+  catch(e) { res.status(500).json({error:e.message}); }
+});
 app.get('/shorts', async (req, res) => {
   try {
     const positions = await alpaca('/v2/positions');
