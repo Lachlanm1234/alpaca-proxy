@@ -55,6 +55,7 @@ let cryptoSignals    = [];
 let influencerAlerts = [];
 let tradeDNA         = [];
 let morningBriefing  = null;
+let upcomingEarnings = []; // In-memory earnings calendar
 let watchlists       = {
   'Earnings Plays':[], 'Short Opportunities':[], 'Insider Accumulation':[],
   'Crypto Momentum':[], 'Influencer Plays':[], 'High Risk / Hype':[],
@@ -186,23 +187,121 @@ async function getInsiderActivity(ticker) {
 
 // Upcoming earnings calendar for next N days
 async function getUpcomingEarnings(days) {
-  days = days || 2;
+  days = days || 7; // Extended to 7 days for more results
+  if (!FINNHUB_KEY) {
+    log('ERROR', 'Earnings scan failed: FINNHUB_KEY not set in environment variables');
+    return [];
+  }
   const today = new Date();
   const future = new Date(today);
   future.setDate(future.getDate() + days);
   const from = today.toISOString().split('T')[0];
   const to = future.toISOString().split('T')[0];
+  log('CATALYST', '📅 Fetching earnings from Finnhub: '+from+' to '+to);
   const data = await finnhub(`/calendar/earnings?from=${from}&to=${to}`);
-  if (!data || !data.earningsCalendar) return [];
-  return data.earningsCalendar
-    .filter(e => e.symbol && e.epsEstimate)
+  if (!data) {
+    log('ERROR', 'Finnhub earnings returned null — check FINNHUB_KEY in Render environment');
+    return [];
+  }
+  if (!data.earningsCalendar) {
+    log('ERROR', 'Finnhub earnings: unexpected response — '+JSON.stringify(data).substring(0,100));
+    return [];
+  }
+  // Include ALL earnings regardless of whether estimate exists
+  const results = data.earningsCalendar
+    .filter(e => e.symbol)
     .map(e => ({
       ticker: e.symbol,
       date: e.date,
       time: e.hour || 'unknown',
-      epsEstimate: e.epsEstimate,
+      epsEstimate: e.epsEstimate || null,   // null is fine — show it anyway
       revenueEstimate: e.revenueEstimate || null,
     }));
+  log('CATALYST', '📅 Finnhub returned '+data.earningsCalendar.length+' total, '+results.length+' valid earnings');
+  return results;
+}
+
+// ── HISTORICAL EARNINGS ANALYSIS ─────────────────────────────────
+// Fetches past earnings results + calculates stock move after each
+// This is the data that tells agents what ACTUALLY happens after earnings
+
+async function getHistoricalEarningsImpact(ticker) {
+  try {
+    // Get last 8 quarters of earnings from Finnhub
+    const earningsHistory = await finnhub(`/stock/earnings?symbol=${ticker}&limit=8`);
+    if (!earningsHistory || !earningsHistory.length) return null;
+
+    const results = [];
+
+    for (const e of earningsHistory) {
+      if (!e.period || (!e.actual && e.actual !== 0)) continue;
+
+      const surprise = e.estimate
+        ? parseFloat(((e.actual - e.estimate) / Math.abs(e.estimate) * 100).toFixed(2))
+        : null;
+      const beat = surprise !== null ? surprise > 0 : null;
+
+      // Fetch price move around earnings date using Alpaca
+      let priceMove1d = null, priceMove5d = null;
+      try {
+        const earningsDate = new Date(e.period);
+        const dayBefore = new Date(earningsDate);
+        dayBefore.setDate(dayBefore.getDate() - 2);
+        const dayAfter = new Date(earningsDate);
+        dayAfter.setDate(dayAfter.getDate() + 6);
+
+        const bars = await fetch(
+          `${ALPACA_DATA}/v2/stocks/${ticker}/bars?timeframe=1Day` +
+          `&start=${dayBefore.toISOString().split('T')[0]}` +
+          `&end=${dayAfter.toISOString().split('T')[0]}&limit=10`,
+          { headers: { 'APCA-API-KEY-ID': ALPACA_KEY, 'APCA-API-SECRET-KEY': ALPACA_SECRET } }
+        ).then(r => r.json());
+
+        if (bars.bars && bars.bars.length >= 2) {
+          const close0 = bars.bars[0].c; // day before
+          if (bars.bars[1]) priceMove1d = parseFloat(((bars.bars[1].c - close0) / close0 * 100).toFixed(2));
+          if (bars.bars[5]) priceMove5d = parseFloat(((bars.bars[5].c - close0) / close0 * 100).toFixed(2));
+        }
+      } catch(e) {}
+
+      results.push({
+        period: e.period,
+        epsActual: e.actual,
+        epsEstimate: e.estimate,
+        surprisePct: surprise,
+        beat,
+        priceMove1d,
+        priceMove5d,
+      });
+    }
+
+    if (!results.length) return null;
+
+    // Calculate averages
+    const beats = results.filter(r => r.beat === true && r.priceMove1d !== null);
+    const misses = results.filter(r => r.beat === false && r.priceMove1d !== null);
+    const all = results.filter(r => r.priceMove1d !== null);
+
+    const avgMoveAll   = all.length   ? parseFloat((all.reduce((s,r)=>s+r.priceMove1d,0)/all.length).toFixed(2))   : null;
+    const avgMoveBeat  = beats.length  ? parseFloat((beats.reduce((s,r)=>s+r.priceMove1d,0)/beats.length).toFixed(2))  : null;
+    const avgMoveMiss  = misses.length ? parseFloat((misses.reduce((s,r)=>s+r.priceMove1d,0)/misses.length).toFixed(2)) : null;
+    const beatRate     = results.filter(r=>r.beat===true).length;
+
+    return {
+      ticker,
+      quartersAnalysed: results.length,
+      beatRate: results.length ? Math.round(beatRate/results.length*100) : null,
+      avgMoveAfterBeat: avgMoveBeat,
+      avgMoveAfterMiss: avgMoveMiss,
+      avgMoveAll,
+      recentQuarters: results.slice(0, 4), // Last 4 quarters
+      summary: `${ticker}: Beat rate ${beatRate}/${results.length} quarters. `+
+        `After beat: avg ${avgMoveBeat>=0?'+':''}${avgMoveBeat}% next day. `+
+        `After miss: avg ${avgMoveMiss>=0?'+':''}${avgMoveMiss}% next day.`,
+    };
+  } catch(e) {
+    return null;
+  }
 }
 
 // Company news sentiment from Finnhub
@@ -910,6 +1009,19 @@ async function initFromDB() {
     if (Array.isArray(qRows) && qRows.length) {
       pendingQueue = qRows.map(r=>({ticker:r.ticker,signal:r.signal,dollars:r.dollars,signalScore:r.signal_score,confidence:r.confidence,catalyst:r.catalyst,thesis:r.thesis,queuedAt:r.queued_at,isCrypto:r.is_crypto}));
       console.log('[AGENT] Restored '+pendingQueue.length+' queued orders');
+    }
+
+    // Restore earnings calendar
+    const earnRows = await dbSelect('earnings_calendar',
+      'order=report_date.asc&limit=100'
+    );
+    if (Array.isArray(earnRows) && earnRows.length) {
+      upcomingEarnings = earnRows.map(r => ({
+        ticker: r.ticker, date: r.report_date,
+        time: r.report_time, epsEstimate: r.eps_estimate,
+        revenueEstimate: r.revenue_estimate,
+      }));
+      console.log('[AGENT] Restored '+upcomingEarnings.length+' earnings records');
     }
 
     const logRows = await dbSelect('decision_log','order=created_at.desc&limit=100');
@@ -1814,16 +1926,31 @@ async function runEarningsPrePositioning() {
 
     log('CATALYST', '📅 Found '+upcoming.length+' upcoming earnings — ' + upcoming.map(e=>e.ticker).join(', '));
 
-    // Save ALL upcoming earnings to DB so calendar is always populated
-    for (const e of upcoming) {
-      dbUpsert('earnings_calendar', {
-        ticker: e.ticker,
-        report_date: e.date,
-        report_time: e.time || 'unknown',
-        eps_estimate: e.epsEstimate || null,
-        revenue_estimate: e.revenueEstimate || null,
-      }).catch(()=>{});
-    }
+    // Store in memory immediately so dashboard can access right away
+    upcomingEarnings = upcoming;
+    log('CATALYST', '📅 Earnings stored in memory — '+upcoming.length+' upcoming reports');
+
+    // Save to Supabase async in background (don't await — takes too long for 100+ records)
+    (async () => {
+      try {
+        await dbDelete('earnings_calendar',
+          'report_date=gte.'+new Date().toISOString().split('T')[0]
+        ).catch(()=>{});
+        // Batch insert in groups of 10 to be faster
+        const batch = [];
+        for (const e of upcoming) {
+          batch.push({
+            ticker: e.ticker, report_date: e.date,
+            report_time: e.time || 'unknown',
+            eps_estimate: e.epsEstimate || null,
+            revenue_estimate: e.revenueEstimate || null,
+          });
+        }
+        // Single bulk insert — much faster than one-by-one
+        await dbInsert('earnings_calendar', batch).catch(()=>{});
+        log('CATALYST', '📅 Earnings saved to Supabase — '+upcoming.length+' records');
+      } catch(e) { log('ERROR', 'Earnings Supabase save failed: '+e.message); }
+    })();
 
     // Analyse top 3 most significant upcoming earnings
     const toAnalyse = upcoming.slice(0, 3);
@@ -1833,12 +1960,13 @@ async function runEarningsPrePositioning() {
         const ticker = earning.ticker;
 
         // Get real data from Finnhub
-        const [ratings, insider, metrics, news, technicalAnalysis] = await Promise.all([
+        const [ratings, insider, metrics, news, technicalAnalysis, historicalImpact] = await Promise.all([
           getAnalystRatings(ticker),
           getInsiderActivity(ticker),
           getMetrics(ticker),
           getCompanyNews(ticker),
           getTechnicalAnalysis(ticker),
+          getHistoricalEarningsImpact(ticker),
         ]);
 
         // Build context from real data
@@ -1880,8 +2008,12 @@ action: LONG, SHORT, or AVOID. Return ONLY JSON.`;
         }
 
         // Add real analyst + insider data to signal
-        analysis.catalyst = 'Earnings '+earning.date+' (est EPS $'+earning.epsEstimate+')';
+        analysis.catalyst = 'Earnings '+earning.date+' (est EPS $'+(earning.epsEstimate||'TBD')+')';
         analysis.detail = analystContext+'. '+insiderContext;
+        analysis.historicalEarningsImpact = historicalImpact;
+        if (historicalImpact) {
+          log('CATALYST', '📊 '+ticker+' historical earnings: '+historicalImpact.summary, { ticker });
+        }
         analysis.epsEstimate = earning.epsEstimate;
         analysis.reportDate = earning.date;
         analysis.reportTime = earning.time;
@@ -2024,6 +2156,29 @@ app.get('/tradedna',(req,res)=>res.json({summary:getTradeDNASummary(),trades:tra
 app.get('/health',(req,res)=>res.json({ok:true,uptime:process.uptime(),dbConnected:!!DB}));
 app.post('/scan-now',(req,res)=>{res.json({message:'Catalyst scan triggered'});runCatalystScan();});
 app.post('/earnings-now',(req,res)=>{res.json({message:'Earnings scan triggered'});runEarningsPrePositioning();});
+app.get('/earnings/history/:ticker', async (req, res) => {
+  try {
+    const impact = await getHistoricalEarningsImpact(req.params.ticker.toUpperCase());
+    res.json(impact || { error: 'No historical data found' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/earnings-test', async (req,res)=>{
+  // Debug endpoint: directly call Finnhub and return raw results
+  try {
+    if (!FINNHUB_KEY) return res.json({error:'FINNHUB_KEY not set in Render environment'});
+    const today = new Date().toISOString().split('T')[0];
+    const future = new Date(); future.setDate(future.getDate()+7);
+    const to = future.toISOString().split('T')[0];
+    const raw = await fetch(`${FINNHUB_BASE}/calendar/earnings?from=${today}&to=${to}&token=${FINNHUB_KEY}`).then(r=>r.json());
+    res.json({
+      finnhubKeySet: !!FINNHUB_KEY,
+      dateRange: {from:today, to},
+      totalReturned: raw?.earningsCalendar?.length||0,
+      sample: raw?.earningsCalendar?.slice(0,5)||[],
+      rawResponse: raw,
+    });
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
 app.get('/analytics',(req,res)=>res.json(getPerformanceAnalytics()||{}));
 app.get('/agent-stats',(req,res)=>getAgentStats().then(d=>res.json(d)).catch(()=>res.json([])));
 app.get('/regime',      (req, res) => res.json(currentRegime));
@@ -2088,7 +2243,42 @@ app.get('/similarity/:ticker',(req,res)=>{
   const sig={ticker:req.params.ticker,catalyst:req.query.catalyst||'',signalScore:parseInt(req.query.score)||70,signal:req.query.signal||'BUY'};
   res.json(calculateHistoricalSimilarity(sig));
 });
-app.get('/earnings',(req,res)=>dbSelect('earnings_calendar','order=report_date.asc&limit=20').then(d=>res.json(d||[])).catch(()=>res.json([])));
+app.get('/earnings', async (req, res) => {
+  // 1. Serve from memory (instant)
+  if (upcomingEarnings.length > 0) {
+    return res.json(upcomingEarnings.slice(0, 50).map(e => ({
+      ticker: e.ticker, report_date: e.date,
+      report_time: e.time, eps_estimate: e.epsEstimate,
+      revenue_estimate: e.revenueEstimate,
+    })));
+  }
+  // 2. Try Supabase
+  try {
+    const rows = await dbSelect('earnings_calendar', 'order=report_date.asc&limit=50');
+    if (Array.isArray(rows) && rows.length) {
+      upcomingEarnings = rows.map(r => ({
+        ticker: r.ticker, date: r.report_date, time: r.report_time,
+        epsEstimate: r.eps_estimate, revenueEstimate: r.revenue_estimate,
+      }));
+      return res.json(rows);
+    }
+  } catch(e) {}
+  // 3. Last resort: fetch directly from Finnhub right now
+  try {
+    if (FINNHUB_KEY) {
+      const fresh = await getUpcomingEarnings(7);
+      if (fresh.length) {
+        upcomingEarnings = fresh;
+        return res.json(fresh.map(e => ({
+          ticker: e.ticker, report_date: e.date,
+          report_time: e.time, eps_estimate: e.epsEstimate,
+          revenue_estimate: e.revenueEstimate,
+        })));
+      }
+    }
+  } catch(e) {}
+  res.json([]);
+});
 app.post('/crypto-now',(req,res)=>{res.json({message:'Crypto scan triggered'});runCryptoScan();});
 app.post('/intel-now',(req,res)=>{res.json({message:'Morning briefing triggered'});runMorningBriefing();});
 app.post('/influencer-now',(req,res)=>{res.json({message:'Influencer scan triggered'});runInfluencerScan();});

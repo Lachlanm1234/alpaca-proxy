@@ -1081,95 +1081,98 @@ async function loadWatchlists() {
 
 // ── EARNINGS ──────────────────────────────────────────────────────
 async function loadEarnings() {
+  const el = document.getElementById('earnings-list');
   try {
-    const items=await fetch(`${BASE}/earnings`).then(r=>r.json());
-    const el=document.getElementById('earnings-list');
-    if(!items||!items.length){if(el)el.innerHTML='<div class="empty"><div class="empty-icon">📅</div><div class="empty-title">No earnings data yet</div>Tap Pre-Position Now to scan</div>';return;}
-    if(el) el.innerHTML=items.map(e=>{
-      const timeLabel=e.report_time==='bmo'?'Before Open':e.report_time==='amc'?'After Close':'During Market';
-      const hasActual=e.eps_actual!==null&&e.eps_actual!==undefined;
-      const surprise=hasActual&&e.eps_estimate?((e.eps_actual-e.eps_estimate)/Math.abs(e.eps_estimate)*100):null;
-      const col=surprise===null?'var(--text2)':surprise>0?'var(--green)':'var(--red)';
-      const color=logoColor(e.ticker||'');
+    if(el) el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text3)">Loading earnings...</div>';
+    const items = await fetch(`${BASE}/earnings`).then(r=>r.json());
+    if (!items || !items.length) {
+      if(el) el.innerHTML = '<div class="empty"><div class="empty-icon">📅</div><div class="empty-title">No earnings data</div><div style="margin-top:8px;font-size:12px;color:var(--text2)">Tap <b>Pre-Position Now</b> to load upcoming earnings from Finnhub.</div></div>';
+      return;
+    }
+    if(el) el.innerHTML = items.map(e => {
+      const timeLabel = e.report_time==='bmo'?'🌅 Before Open':e.report_time==='amc'?'🌆 After Close':'🕐 Time TBD';
+      const hasActual = e.eps_actual!==null && e.eps_actual!==undefined;
+      const surprise = hasActual && e.eps_estimate ? ((e.eps_actual-e.eps_estimate)/Math.abs(e.eps_estimate)*100) : null;
+      const col = surprise===null?'var(--text2)':surprise>0?'var(--green)':'var(--red)';
+      const color = logoColor(e.ticker||'');
       return `<div class="earnings-row">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div style="display:flex;justify-content:space-between;align-items:center">
           <div style="display:flex;align-items:center;gap:10px">
-            <div class="ticker-logo" style="background:${color}22;color:${color};width:36px;height:36px;border-radius:9px">${(e.ticker||'').substring(0,2)}</div>
+            <div class="ticker-logo" style="background:${color}22;color:${color};width:40px;height:40px;border-radius:10px;font-size:13px">${(e.ticker||'').substring(0,2)}</div>
             <div>
-              <div style="display:flex;align-items:center;gap:7px"><span style="font-size:14px;font-weight:800">${e.ticker}</span><span style="font-size:10px;color:var(--text2);background:var(--card2);padding:2px 7px;border-radius:4px">${timeLabel}</span></div>
-              <div style="font-size:11px;color:var(--text2);margin-top:2px">${e.report_date||''}${e.company_name?' · '+e.company_name:''}</div>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <span style="font-size:15px;font-weight:800">${e.ticker}</span>
+                <span style="font-size:10px;color:var(--text2);background:var(--card2);padding:2px 8px;border-radius:4px">${timeLabel}</span>
+              </div>
+              <div style="font-size:11px;color:var(--text2);margin-top:2px">${e.report_date||'Date TBD'}</div>
             </div>
           </div>
           <div style="text-align:right">
-            <div style="font-size:12px;color:var(--text2)">EPS est: <b>$${e.eps_estimate||'—'}</b></div>
-            ${hasActual?`<div style="font-size:13px;font-weight:700;color:${col}">Actual: $${e.eps_actual} (${surprise>0?'+':''}${surprise?.toFixed(1)}%)</div>`:''}
+            ${e.eps_estimate?`<div style="font-size:12px;color:var(--text2)">EPS est: <b style="color:var(--text)">$${e.eps_estimate}</b></div>`:'<div style="font-size:11px;color:var(--text3)">No estimate yet</div>'}
             ${e.revenue_estimate?`<div style="font-size:11px;color:var(--text2)">Rev: $${Math.round(e.revenue_estimate/1e6)}M</div>`:''}
+            ${hasActual?`<div style="font-size:13px;font-weight:700;color:${col}">${surprise>0?'BEAT':'MISS'} ${surprise>0?'+':''}${surprise?.toFixed(1)}%</div>`:''}
           </div>
         </div>
+        <div id="hist-${e.ticker}" style="margin-top:8px"></div>
       </div>`;
     }).join('');
-  } catch(e){}
+    // Load historical impact for top 8 tickers
+    items.slice(0,8).forEach(e => loadHistoricalImpact(e.ticker));
+  } catch(e) {
+    if(el) el.innerHTML = '<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">'+e.message+'</div></div>';
+  }
 }
 
-// ── INFLUENCERS ───────────────────────────────────────────────────
-async function loadInfluencers() {
+async function loadHistoricalImpact(ticker) {
   try {
-    const items=await fetch(`${BASE}/influencers`).then(r=>r.json());
-    const el=document.getElementById('influencer-list');
-    if(!items||!items.length){if(el)el.innerHTML='<div class="empty"><div class="empty-icon">⚡</div><div class="empty-title">No activity detected</div>Tap Scan Now to check</div>';return;}
-    if(el) el.innerHTML=items.map(item=>{
-      const sentColor=item.sentiment==='BULLISH'?'var(--green)':item.sentiment==='BEARISH'?'var(--red)':'var(--amber)';
-      const tickers=(item.relatedTickers||[]).join(', ');
-      return `<div class="influencer-row">
-        <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:5px">
-          <span class="influencer-name">${item.person||''}</span>
-          <span style="font-size:10px;color:var(--text2)">${item.platform||''}</span>
-          ${item.urgency==='HIGH'?'<span style="font-size:9px;background:var(--red-bg);color:var(--red);padding:1px 6px;border-radius:3px;font-weight:700;margin-left:4px">🚨 HIGH</span>':''}
+    const h = await fetch(`${BASE}/earnings/history/${ticker}`).then(r=>r.json());
+    const el = document.getElementById('hist-'+ticker);
+    if (!el || !h || h.error || !h.quartersAnalysed) return;
+    const beatColor = (h.avgMoveAfterBeat||0)>=0?'var(--green)':'var(--red)';
+    const missColor = (h.avgMoveAfterMiss||0)>=0?'var(--green)':'var(--red)';
+    el.innerHTML = `<div style="background:var(--card2);border-radius:8px;padding:10px 12px;border-left:3px solid var(--purple)">
+      <div style="font-size:9px;font-weight:700;color:var(--purple2);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:7px">📈 Historical Post-Earnings Moves (${h.quartersAnalysed} quarters)</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px">
+        <div style="background:var(--card);border-radius:7px;padding:8px;text-align:center">
+          <div style="font-size:9px;color:var(--text2)">Beat Rate</div>
+          <div style="font-size:17px;font-weight:800;color:${(h.beatRate||0)>=60?'var(--green)':'var(--amber)'}">${h.beatRate||0}%</div>
         </div>
-        <div style="font-size:13px;color:var(--text);line-height:1.4">${item.action||''}</div>
-        ${item.tradingImplication?`<div style="font-size:12px;color:var(--blue);margin-top:5px;font-style:italic">💡 ${item.tradingImplication}</div>`:''}
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:7px;align-items:center">
-          <span style="font-size:10px;font-weight:600;background:${sentColor}22;color:${sentColor};padding:2px 8px;border-radius:4px">${item.sentiment||'NEUTRAL'}</span>
-          ${tickers?`<span style="font-size:10px;color:var(--text2);background:var(--card2);padding:2px 8px;border-radius:4px">${tickers}</span>`:''}
-          ${item.estimatedImpact?`<span style="font-size:10px;color:var(--text2)">Est: <b>${item.estimatedImpact}</b></span>`:''}
-          ${item.historicalAvgImpact?`<span style="font-size:10px;color:var(--text2)">Hist: <b>${item.historicalAvgImpact}</b></span>`:''}
+        <div style="background:var(--card);border-radius:7px;padding:8px;text-align:center">
+          <div style="font-size:9px;color:var(--text2)">After Beat (1d)</div>
+          <div style="font-size:17px;font-weight:800;color:${beatColor}">${h.avgMoveAfterBeat!==null?(h.avgMoveAfterBeat>=0?'+':'')+h.avgMoveAfterBeat+'%':'—'}</div>
         </div>
-        <div style="font-size:10px;color:var(--text3);margin-top:5px">${item.foundAt?new Date(item.foundAt).toLocaleString():''}</div>
-      </div>`;
-    }).join('');
+        <div style="background:var(--card);border-radius:7px;padding:8px;text-align:center">
+          <div style="font-size:9px;color:var(--text2)">After Miss (1d)</div>
+          <div style="font-size:17px;font-weight:800;color:${missColor}">${h.avgMoveAfterMiss!==null?(h.avgMoveAfterMiss>=0?'+':'')+h.avgMoveAfterMiss+'%':'—'}</div>
+        </div>
+      </div>
+      ${h.recentQuarters&&h.recentQuarters.filter(q=>q.priceMove1d!==null).length?
+        `<div style="display:flex;gap:5px;flex-wrap:wrap">${h.recentQuarters.filter(q=>q.priceMove1d!==null).map(q=>
+          `<div style="background:var(--card);border-radius:6px;padding:4px 8px;text-align:center;min-width:56px">
+            <div style="font-size:8px;color:var(--text3)">${(q.period||'').substring(0,7)}</div>
+            <div style="font-size:11px;font-weight:700;color:${q.priceMove1d>=0?'var(--green)':'var(--red)'}">${q.priceMove1d>=0?'+':''}${q.priceMove1d}%</div>
+            <div style="font-size:8px;font-weight:700;color:${q.beat?'var(--green)':'var(--red)'}">${q.beat?'BEAT':'MISS'}</div>
+          </div>`).join('')}
+        </div>`:''}
+    </div>`;
   } catch(e){}
 }
 
-// ── PENDING QUEUE ─────────────────────────────────────────────────
-async function loadPending() {
-  try {
-    const items=await fetch(`${BASE}/pending`).then(r=>r.json());
-    const el=document.getElementById('queue-wrap-port');
-    if(el) el.style.display=items?.length?'block':'none';
-    setEl('queue-count-p',items?.length||0);
-    const listEl=document.getElementById('queue-list-p');
-    if(listEl) listEl.innerHTML=items?.length?items.map(q=>`<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.04)"><div><div style="font-size:13px;font-weight:700">${q.ticker}</div><div style="font-size:11px;color:var(--text2)">${q.catalyst||''}</div></div><div style="font-weight:700;color:var(--green)">$${q.dollars?parseFloat(q.dollars).toFixed(0):'—'}</div></div>`).join(''):'';
-  } catch(e){}
-}
 
-// ── ACTIONS ───────────────────────────────────────────────────────
-async function triggerScan() {
-  ['scan-btn','scan-btn2'].forEach(id=>{ const b=document.getElementById(id); if(b){b.textContent='Scanning...';b.disabled=true;} });
-  try { await fetch(`${BASE}/scan-now`,{method:'POST'}); } catch(e){}
-  setTimeout(()=>{ ['scan-btn','scan-btn2'].forEach(id=>{ const b=document.getElementById(id); if(b){b.textContent=id==='scan-btn'?'Scan Now':'⚡ Catalyst Scan';b.disabled=false;} }); },6000);
-  setTimeout(loadAll,8000); setTimeout(loadAll,20000);
-}
-async function triggerBriefing() {
-  try { await fetch(`${BASE}/intel-now`,{method:'POST'}); setTimeout(()=>{loadBriefing();loadAll();},10000); } catch(e){}
-}
-async function triggerCrypto() {
-  try { await fetch(`${BASE}/crypto-now`,{method:'POST'}); setTimeout(loadAll,8000); } catch(e){}
-}
-async function triggerInfluencer() {
-  try { await fetch(`${BASE}/influencer-now`,{method:'POST'}); setTimeout(loadAll,10000); } catch(e){}
-}
 async function triggerEarnings() {
-  try { await fetch(`${BASE}/earnings-now`,{method:'POST'}); setTimeout(loadEarnings,10000); setTimeout(loadEarnings,25000); } catch(e){}
+  try {
+    await fetch(`${BASE}/earnings-now`, {method:'POST'});
+    // Poll every 3s — data is in memory so should appear within seconds
+    let attempts = 0;
+    const poll = setInterval(async () => {
+      attempts++;
+      try {
+        const data = await fetch(`${BASE}/earnings`).then(r=>r.json());
+        if (data && data.length > 0) { clearInterval(poll); loadEarnings(); return; }
+      } catch(e){}
+      if (attempts >= 12) { clearInterval(poll); loadEarnings(); }
+    }, 3000);
+  } catch(e){}
 }
 async function clearQueue() {
   try { await fetch(`${BASE}/clear-queue`,{method:'POST'}); await loadPending(); } catch(e){}
