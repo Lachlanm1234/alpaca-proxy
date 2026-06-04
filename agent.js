@@ -637,7 +637,44 @@ async function getLivePrice(ticker) {
   }catch(e){return 0;}
 }
 async function isShortable(ticker) {
-  try{const a=await alpaca('/v2/assets/'+ticker);return a.shortable&&a.easy_to_borrow;}catch(e){return false;}
+  try {
+    const a = await alpaca('/v2/assets/' + ticker);
+    if (a.shortable && a.easy_to_borrow) {
+      log('TRADE', '✅ '+ticker+' is shortable (easy to borrow)', { ticker });
+      return true;
+    }
+    if (a.shortable && !a.easy_to_borrow) {
+      log('TRADE', '⚠️ '+ticker+' shortable but NOT easy to borrow — blocked', { ticker });
+      return false;
+    }
+    log('TRADE', '❌ '+ticker+' is NOT shortable on Alpaca', { ticker });
+    return false;
+  } catch(e) {
+    log('ERROR', 'isShortable check failed for '+ticker+': '+e.message+' — defaulting to allow', { ticker });
+    return true; // Don't block shorts just because the check failed
+  }
+}
+
+// Diagnostics: get full status of all short signals
+function getShortsDiagnostics() {
+  const shorts = catalystSignals.filter(s => s.signal === 'SHORT' || s.type === 'SHORT');
+  return {
+    totalShortSignals: shorts.length,
+    shorts: shorts.map(s => ({
+      ticker: s.ticker,
+      signal: s.signal,
+      signalScore: s.signalScore,
+      confidence: s.confidence,
+      riskScore: s.riskScore,
+      riskLabel: s.riskLabel,
+      targetPrice: s.targetPrice,
+      stopLoss: s.stopLoss,
+      foundAt: s.foundAt,
+      catalyst: s.catalyst,
+      blockedByRisk: (s.riskScore || 0) >= 70,
+      hasPriceTargets: !!(s.targetPrice && s.stopLoss),
+    })),
+  };
 }
 
 // ── CLAUDE ────────────────────────────────────────────────────────
@@ -1283,11 +1320,22 @@ async function runTradeCheck() {
         const livePrice=await getLivePrice(ticker);if(!livePrice) continue;
         const score=signal.signalScore||0,conf=signal.confidence||0;
         const target=parseFloat(signal.targetPrice||0),stop=parseFloat(signal.stopLoss||0);
-        const longValid=!isShort&&livePrice>stop&&livePrice<target;
-        const shortValid=isShort&&stop>0&&livePrice<stop&&livePrice>target;
+        const longValid = !isShort && livePrice > stop && livePrice < target;
+        // For shorts: if target=0 (not set), allow entry as long as price is below stop
+        // Target=0 means Claude didn't set one; we'll use a default 10% below entry
+        const shortTargetOk = target > 0 ? livePrice > target : true;
+        const shortStopOk   = stop > 0 ? livePrice < stop : true;
+        const shortValid = isShort && shortStopOk && shortTargetOk;
         const cryptoValid=isCrypto&&signal.signal==='BUY'&&livePrice>stop&&livePrice<target;
         if(longValid||shortValid||cryptoValid){
-          if(isShort&&!isCrypto&&!(await isShortable(ticker))){log('TRADE','⏭ '+ticker+' not shortable');continue;}
+          if (isShort && !isCrypto) {
+            log('TRADE', '🔍 Checking if '+ticker+' is shortable on Alpaca...', { ticker });
+            const canShort = await isShortable(ticker);
+            if (!canShort) {
+              log('TRADE', '🚫 SHORT blocked: '+ticker+' not available to borrow', { ticker, reason: 'NOT_SHORTABLE' });
+              continue;
+            }
+          }
           const dollars=positionDollars(portfolio,score,conf);
           if(!dollars||dollars>buyingPower) continue;
           const side=isShort?'sell':'buy';
@@ -1534,6 +1582,36 @@ app.post('/scan-now',(req,res)=>{res.json({message:'Catalyst scan triggered'});r
 app.post('/earnings-now',(req,res)=>{res.json({message:'Earnings scan triggered'});runEarningsPrePositioning();});
 app.get('/analytics',(req,res)=>res.json(getPerformanceAnalytics()||{}));
 app.get('/agent-stats',(req,res)=>getAgentStats().then(d=>res.json(d)).catch(()=>res.json([])));
+app.get('/shorts', async (req, res) => {
+  try {
+    const positions = await alpaca('/v2/positions');
+    const shortPositions = Array.isArray(positions)
+      ? positions.filter(p => parseFloat(p.qty) < 0)
+      : [];
+    const shortSignals = catalystSignals.filter(s => s.signal === 'SHORT' || s.type === 'SHORT');
+    res.json({
+      activeShortPositions: shortPositions,
+      pendingShortSignals: shortSignals,
+      diagnostics: getShortsDiagnostics(),
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/shorts-debug', (req, res) => res.json(getShortsDiagnostics()));
+
+app.post('/test-shortable/:ticker', async (req, res) => {
+  try {
+    const a = await alpaca('/v2/assets/' + req.params.ticker);
+    res.json({
+      ticker: req.params.ticker,
+      shortable: a.shortable,
+      easyToBorrow: a.easy_to_borrow,
+      canShort: a.shortable && a.easy_to_borrow,
+      assetDetails: { status: a.status, tradable: a.tradable, fractionable: a.fractionable },
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/technical/:ticker', async (req,res)=>{
   try {
     const analysis = await getTechnicalAnalysis(req.params.ticker);
