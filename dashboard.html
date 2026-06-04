@@ -379,9 +379,6 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
             <div style="text-align:center"><div style="font-size:10px;opacity:0.7;text-transform:uppercase;letter-spacing:0.5px">Est. VIX</div><div style="font-size:18px;font-weight:800" id="regime-vix">—</div></div>
           </div>
         </div>
-        <div style="display:none">
-        </div>
-
         <!-- Watchlist Table -->
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
@@ -457,7 +454,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
       <div id="page-briefing" style="display:none" class="fade-up">
         <div class="page-header"><div><div class="page-greeting" style="font-size:20px">AI Morning Briefing</div><div class="page-sub">Daily intelligence from your AI Chief Investment Officer</div></div>
         <button onclick="triggerBriefing()" style="background:var(--purple-bg);color:var(--purple2);border:1px solid rgba(124,106,255,0.3);padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">Generate Now</button></div>
-        <div id="briefing-content"><div class="empty"><div class="empty-icon">☀️</div><div class="empty-title">No briefing yet</div>Generated at 9:00am ET daily, or tap Generate Now</div></div>
+        <div id="briefing-content"><div class="empty"><div class="empty-icon">☀️</div><div class="empty-title">No briefing generated yet</div><div style="margin-top:8px;font-size:12px">Tap <b>Generate Now</b> to run immediately.<br>Runs automatically at 9:00am ET daily.</div><button onclick="triggerBriefing()" style="margin-top:12px;background:var(--purple-bg);color:var(--purple2);border:1px solid rgba(124,106,255,0.3);padding:8px 18px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">✦ Generate Briefing Now</button></div></div>
       </div>
 
       <!-- ═══ ALERTS / LOG PAGE ═══ -->
@@ -470,9 +467,30 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
       <div id="page-analytics" style="display:none" class="fade-up">
         <div class="page-header"><div><div class="page-greeting" style="font-size:20px">Analytics</div><div class="page-sub">Performance metrics — builds as trades complete</div></div></div>
         <div id="analytics-stats" class="grid-3" style="margin-bottom:16px"></div>
+        <!-- Signal Memory Summary -->
+        <div class="card" style="margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+            <div class="card-title" style="margin-bottom:0">📚 Market Memory</div>
+            <div style="font-size:10px;color:var(--text3)">All signals including rejected & expired</div>
+          </div>
+          <div id="signal-memory-content">
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px" id="memory-stats">
+              <div class="analytics-stat"><div class="analytics-big" id="mem-executed" style="color:var(--green)">—</div><div class="analytics-label">Executed</div></div>
+              <div class="analytics-stat"><div class="analytics-big" id="mem-rejected" style="color:var(--amber)">—</div><div class="analytics-label">Rejected</div></div>
+              <div class="analytics-stat"><div class="analytics-big" id="mem-expired" style="color:var(--text2)">—</div><div class="analytics-label">Expired</div></div>
+            </div>
+          </div>
+        </div>
+
         <div class="grid-2">
           <div class="card"><div class="card-title">Best Performing Catalysts</div><div id="best-catalysts"><div class="empty">No data yet</div></div></div>
-          <div class="card"><div class="card-title">Agent Performance Leaderboard</div><div id="agent-perf"><div class="empty">No data yet</div></div></div>
+          <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+            <div class="card-title" style="margin-bottom:0">Agent Performance & Weights</div>
+            <div style="font-size:10px;color:var(--text3)">Weights auto-update from outcomes</div>
+          </div>
+          <div id="agent-perf"><div class="empty">No data yet — builds as trades close</div></div>
+        </div>
         </div>
       </div>
 
@@ -487,7 +505,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
       <div id="page-earnings" style="display:none" class="fade-up">
         <div class="page-header"><div><div class="page-greeting" style="font-size:20px">Earnings Calendar</div><div class="page-sub">Upcoming reports with pre-positioning signals</div></div>
         <button onclick="triggerEarnings()" style="background:rgba(34,197,94,0.1);color:var(--green);border:1px solid rgba(34,197,94,0.25);padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">📅 Pre-Position Now</button></div>
-        <div class="card"><div id="earnings-list"><div class="empty"><div class="empty-icon">📅</div><div class="empty-title">No earnings data yet</div>Tap Pre-Position Now to scan Finnhub</div></div></div>
+        <div class="card"><div id="earnings-list"><div class="empty"><div class="empty-icon">📅</div><div class="empty-title">No earnings data yet</div><div style="margin-top:8px;font-size:12px">Tap <b>Pre-Position Now</b> to pull upcoming earnings from Finnhub.<br>Requires FINNHUB_KEY in Render environment.</div></div></div></div>
       </div>
 
       <!-- ═══ RANKINGS PAGE ═══ -->
@@ -970,10 +988,18 @@ async function loadBriefing() {
 // ── ANALYTICS ─────────────────────────────────────────────────────
 async function loadAnalytics() {
   try {
-    const [analytics, agentStats] = await Promise.all([
+    const [analytics, agentStats, weights, memory] = await Promise.all([
       fetch(`${BASE}/analytics`).then(r=>r.json()),
       fetch(`${BASE}/agent-stats`).then(r=>r.json()),
+      fetch(`${BASE}/agent-weights`).then(r=>r.json()).catch(()=>({})),
+      fetch(`${BASE}/signal-memory`).then(r=>r.json()).catch(()=>({summary:{}})),
     ]);
+
+    // Signal memory stats
+    const ms = memory?.summary || {};
+    setEl('mem-executed', ms.executed||0);
+    setEl('mem-rejected', ms.rejected||0);
+    setEl('mem-expired',  ms.expired||0);
     const statsEl=document.getElementById('analytics-stats');
     if(statsEl&&analytics&&analytics.totalTrades>0){
       statsEl.innerHTML=`
@@ -988,7 +1014,22 @@ async function loadAnalytics() {
     const catalysts=analytics?.bestCatalysts||[];
     if(bestEl&&catalysts.length) bestEl.innerHTML=catalysts.map(c=>`<div class="catalyst-row"><div><div style="font-size:13px;font-weight:600">${c.catalyst}</div><div style="font-size:11px;color:var(--text2)">${c.count} trades</div></div><div style="text-align:right"><div style="font-size:13px;font-weight:700;color:var(--green)">${c.winRate}% win</div><div style="font-size:11px;color:var(--text2)">${c.avgReturn>=0?'+':''}${c.avgReturn}%</div></div></div>`).join('');
     const agentEl=document.getElementById('agent-perf');
-    if(agentEl&&agentStats&&agentStats.length) agentEl.innerHTML=agentStats.map(a=>`<div class="catalyst-row"><div><div style="font-size:13px;font-weight:600">${a.agent}</div><div style="font-size:11px;color:var(--text2)">${a.total} predictions</div></div><div style="text-align:right"><div style="font-size:16px;font-weight:800;color:${a.winRate>=65?'var(--green)':a.winRate>=50?'var(--amber)':'var(--red)'}">${a.winRate}%</div><div style="font-size:11px;color:var(--text2)">accuracy</div></div></div>`).join('');
+    if(agentEl&&agentStats&&agentStats.length) {
+      agentEl.innerHTML=agentStats.map(a=>{
+        const w = weights[a.agent] || 1.0;
+        const wColor = w>=1.5?'var(--green)':w>=1.0?'var(--text)':w>=0.7?'var(--amber)':'var(--red)';
+        return `<div class="catalyst-row">
+          <div>
+            <div style="font-size:13px;font-weight:600">${a.agent}</div>
+            <div style="font-size:11px;color:var(--text2)">${a.total} predictions</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:14px">
+            <div style="text-align:center"><div style="font-size:11px;color:var(--text2)">Weight</div><div style="font-size:14px;font-weight:800;color:${wColor}">${w}x</div></div>
+            <div style="text-align:right"><div style="font-size:16px;font-weight:800;color:${a.winRate>=65?'var(--green)':a.winRate>=50?'var(--amber)':'var(--red)'}">${a.winRate}%</div><div style="font-size:11px;color:var(--text2)">accuracy</div></div>
+          </div>
+        </div>`;
+      }).join('');
+    }
   } catch(e){}
 }
 

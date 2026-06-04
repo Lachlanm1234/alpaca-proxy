@@ -927,6 +927,8 @@ async function initFromDB() {
     }
 
     console.log('[AGENT] Database restore complete');
+    // Refresh agent weights from historical performance
+    await refreshAgentWeights();
   } catch(e) { console.error('[AGENT] DB restore failed:', e.message); }
 }
 
@@ -1280,6 +1282,89 @@ function getTradeDNASummary() {
   return `Win rate: ${winRate}% (${wins}/${tradeDNA.length} trades). Avg return: ${avgReturn}%. Best: ${top?top[0]:'unknown'}.`;
 }
 
+// ── AGENT WEIGHT ENGINE ──────────────────────────────────────────
+// Tracks historical accuracy per agent and weights votes accordingly
+let agentWeights = {
+  Momentum: 1.0, Earnings: 1.0, Macro: 1.0,
+  Sentiment: 1.0, Technical: 1.0, Risk: 1.0,
+};
+
+async function refreshAgentWeights() {
+  try {
+    const rows = await dbSelect('agent_performance',
+      'order=created_at.desc&limit=200'
+    );
+    if (!Array.isArray(rows) || rows.length < 10) return;
+
+    const byAgent = {};
+    rows.forEach(r => {
+      if (!byAgent[r.agent_name]) byAgent[r.agent_name] = { correct: 0, total: 0 };
+      byAgent[r.agent_name].total++;
+      if (r.was_correct) byAgent[r.agent_name].correct++;
+    });
+
+    // Recalculate weights: 1.0 = baseline (50% accuracy)
+    // Better than 65% = up to 2.0x weight
+    // Worse than 40% = down to 0.5x weight
+    Object.entries(byAgent).forEach(([agent, stats]) => {
+      if (stats.total < 5) return; // Need min 5 predictions
+      const accuracy = stats.correct / stats.total;
+      const weight = Math.max(0.5, Math.min(2.0,
+        0.5 + (accuracy * 3) // 50% acc = 2.0x, 33% acc = 1.5x, 0% = 0.5x
+      ));
+      agentWeights[agent] = parseFloat(weight.toFixed(2));
+    });
+
+    log('AGENT', '⚖️ Agent weights updated: '+
+      Object.entries(agentWeights).map(([k,v])=>k+':'+v+'x').join(' | '));
+  } catch(e) {
+    log('ERROR', 'Agent weight refresh failed: '+e.message);
+  }
+}
+
+// Apply weights to agent votes for conviction calculation
+function weightedAgentConsensus(agentVotes, isShort) {
+  let weightedBuy = 0, weightedSell = 0, weightedHold = 0, totalWeight = 0;
+  agentVotes.forEach(v => {
+    const w = agentWeights[v.agent] || 1.0;
+    totalWeight += w;
+    if (v.vote === 'BUY')  weightedBuy  += w;
+    if (v.vote === 'SELL') weightedSell += w;
+    if (v.vote === 'HOLD') weightedHold += w;
+  });
+  if (totalWeight === 0) return 50;
+  const bullishWeight = isShort ? weightedSell : weightedBuy;
+  return Math.round((bullishWeight / totalWeight) * 100);
+}
+
+// ── PHASE 1B: MARKET MEMORY DATABASE ─────────────────────────────
+// Stores ALL signals — not just executed trades — so we can learn
+// from rejected, blocked, and expired signals too.
+async function recordSignalMemory(signal, disposition, reason) {
+  // disposition: 'EXECUTED', 'REJECTED_RISK', 'REJECTED_NOT_SHORTABLE',
+  //              'EXPIRED', 'BLOCKED_MARKET_CLOSED', 'SKIPPED_MAX_POSITIONS'
+  if (!DB) return;
+  try {
+    await dbInsert('signal_memory', {
+      ticker: signal.ticker || signal.symbol,
+      signal: signal.signal,
+      signal_score: signal.signalScore,
+      confidence: signal.confidence,
+      catalyst: signal.catalyst,
+      risk_score: signal.riskScore,
+      disposition,
+      reason,
+      agent_votes: signal.conviction?.agentVotes ? JSON.stringify(signal.conviction.agentVotes) : null,
+      conviction_probability: signal.conviction?.probability || null,
+      technical_score: signal.technicalAnalysis?.technicalScore || null,
+      market_regime: currentRegime.regime || null,
+      is_crypto: signal.isCrypto || false,
+      found_at: signal.foundAt || new Date().toISOString(),
+      recorded_at: new Date().toISOString(),
+    }).catch(() => {});
+  } catch(e) {}
+}
+
 // ── MULTI-AGENT ANALYST ───────────────────────────────────────────
 async function runMultiAgentAnalysis(signal) {
   const ticker=signal.ticker||signal.symbol;
@@ -1317,7 +1402,7 @@ function buildConviction(signal, agentVotes) {
   const buyCount=agentVotes.filter(v=>v.vote==='BUY').length;
   const sellCount=agentVotes.filter(v=>v.vote==='SELL').length;
   const total=agentVotes.length;
-  const consensus=isShort?(sellCount/total)*100:(buyCount/total)*100;
+  const consensus = weightedAgentConsensus(agentVotes, isShort);
 
   // Get historical similarity
   const similarity = calculateHistoricalSimilarity(signal);
@@ -1385,6 +1470,7 @@ async function placeOrder(ticker, dollars, side, analysis, isCrypto) {
       dbDelete('pending_queue','ticker=eq.'+ticker).catch(()=>{});
       const typeLabel=isCrypto?'₿ CRYPTO':side==='sell'?'🔻 SHORT':'🟢 LONG';
       const conv=analysis?.conviction;
+      recordSignalMemory(signal||{ticker,signal:side==='sell'?'SHORT':'BUY'}, 'EXECUTED', typeLabel+' $'+dollars.toFixed(0));
       log('TRADE',typeLabel+' executed: '+ticker+' $'+dollars.toFixed(0)+(conv?' | Prob:'+conv.probability+'% RR:'+conv.riskReward:''),{ticker,side,dollars,orderId:order.id,isCrypto,thesis:analysis?.thesis,catalyst:analysis?.catalyst,probability:conv?.probability,expectedReturn:conv?.expectedReturn,agentVotes:conv?.agentVoteSummary,riskReward:conv?.riskReward});
       // Remove from active signals in DB
       dbDelete('active_signals','ticker=eq.'+ticker).catch(()=>{});
@@ -1668,6 +1754,7 @@ async function runTradeCheck() {
         const maxAge=isCrypto?48*60*60*1000:24*60*60*1000;
         if(signal.foundAt&&(Date.now()-new Date(signal.foundAt).getTime())>maxAge){
           log('TRADE','🗑 Expired: '+ticker);
+          recordSignalMemory(signal, 'EXPIRED', 'Signal older than '+maxAge/3600000+'hrs');
           if(isCrypto)cryptoSignals=cryptoSignals.filter(s=>s.symbol!==ticker);
           else catalystSignals=catalystSignals.filter(s=>s.ticker!==ticker);
           dbDelete('active_signals','ticker=eq.'+ticker).catch(()=>{});
@@ -1942,6 +2029,21 @@ app.get('/agent-stats',(req,res)=>getAgentStats().then(d=>res.json(d)).catch(()=
 app.get('/regime',      (req, res) => res.json(currentRegime));
 app.get('/rankings',    (req, res) => res.json(rankOpportunities()));
 app.get('/genome',      (req, res) => res.json(buildStrategyGenome()));
+app.get('/agent-weights', (req, res) => res.json(agentWeights));
+app.get('/signal-memory', async (req, res) => {
+  try {
+    const rows = await dbSelect('signal_memory',
+      'order=recorded_at.desc&limit=100'
+    );
+    const summary = {
+      executed:  rows.filter(r=>r.disposition==='EXECUTED').length,
+      rejected:  rows.filter(r=>r.disposition?.startsWith('REJECTED')).length,
+      expired:   rows.filter(r=>r.disposition==='EXPIRED').length,
+      totalSignals: rows.length,
+    };
+    res.json({ summary, signals: rows });
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
 app.get('/portfolio-risk', async (req, res) => {
   try { res.json(await analyzePortfolioConcentration()); }
   catch(e) { res.status(500).json({error:e.message}); }
