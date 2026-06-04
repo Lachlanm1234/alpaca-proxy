@@ -186,38 +186,23 @@ async function getInsiderActivity(ticker) {
 
 // Upcoming earnings calendar for next N days
 async function getUpcomingEarnings(days) {
-  days = days || 7; // Extended to 7 days for more results
-  if (!FINNHUB_KEY) {
-    log('ERROR', 'Earnings scan failed: FINNHUB_KEY not set in environment variables');
-    return [];
-  }
+  days = days || 2;
   const today = new Date();
   const future = new Date(today);
   future.setDate(future.getDate() + days);
   const from = today.toISOString().split('T')[0];
   const to = future.toISOString().split('T')[0];
-  log('CATALYST', '📅 Fetching earnings from Finnhub: '+from+' to '+to);
   const data = await finnhub(`/calendar/earnings?from=${from}&to=${to}`);
-  if (!data) {
-    log('ERROR', 'Finnhub earnings returned null — check FINNHUB_KEY in Render environment');
-    return [];
-  }
-  if (!data.earningsCalendar) {
-    log('ERROR', 'Finnhub earnings: unexpected response — '+JSON.stringify(data).substring(0,100));
-    return [];
-  }
-  // Include ALL earnings regardless of whether estimate exists
-  const results = data.earningsCalendar
-    .filter(e => e.symbol)
+  if (!data || !data.earningsCalendar) return [];
+  return data.earningsCalendar
+    .filter(e => e.symbol && e.epsEstimate)
     .map(e => ({
       ticker: e.symbol,
       date: e.date,
       time: e.hour || 'unknown',
-      epsEstimate: e.epsEstimate || null,   // null is fine — show it anyway
+      epsEstimate: e.epsEstimate,
       revenueEstimate: e.revenueEstimate || null,
     }));
-  log('CATALYST', '📅 Finnhub returned '+data.earningsCalendar.length+' total, '+results.length+' valid earnings');
-  return results;
 }
 
 // Company news sentiment from Finnhub
@@ -1829,12 +1814,9 @@ async function runEarningsPrePositioning() {
 
     log('CATALYST', '📅 Found '+upcoming.length+' upcoming earnings — ' + upcoming.map(e=>e.ticker).join(', '));
 
-    // Save ALL upcoming earnings to DB — delete stale entries first
-    log('CATALYST', '📅 Saving '+upcoming.length+' earnings to Supabase...');
-    // Clear old future earnings to avoid duplicates
-    await dbDelete('earnings_calendar', 'report_date=gte.'+new Date().toISOString().split('T')[0]).catch(()=>{});
+    // Save ALL upcoming earnings to DB so calendar is always populated
     for (const e of upcoming) {
-      await dbInsert('earnings_calendar', {
+      dbUpsert('earnings_calendar', {
         ticker: e.ticker,
         report_date: e.date,
         report_time: e.time || 'unknown',
@@ -1842,7 +1824,6 @@ async function runEarningsPrePositioning() {
         revenue_estimate: e.revenueEstimate || null,
       }).catch(()=>{});
     }
-    log('CATALYST', '📅 Earnings calendar saved — '+upcoming.length+' reports');
 
     // Analyse top 3 most significant upcoming earnings
     const toAnalyse = upcoming.slice(0, 3);
@@ -2043,23 +2024,6 @@ app.get('/tradedna',(req,res)=>res.json({summary:getTradeDNASummary(),trades:tra
 app.get('/health',(req,res)=>res.json({ok:true,uptime:process.uptime(),dbConnected:!!DB}));
 app.post('/scan-now',(req,res)=>{res.json({message:'Catalyst scan triggered'});runCatalystScan();});
 app.post('/earnings-now',(req,res)=>{res.json({message:'Earnings scan triggered'});runEarningsPrePositioning();});
-app.get('/earnings-test', async (req,res)=>{
-  // Debug endpoint: directly call Finnhub and return raw results
-  try {
-    if (!FINNHUB_KEY) return res.json({error:'FINNHUB_KEY not set in Render environment'});
-    const today = new Date().toISOString().split('T')[0];
-    const future = new Date(); future.setDate(future.getDate()+7);
-    const to = future.toISOString().split('T')[0];
-    const raw = await fetch(`${FINNHUB_BASE}/calendar/earnings?from=${today}&to=${to}&token=${FINNHUB_KEY}`).then(r=>r.json());
-    res.json({
-      finnhubKeySet: !!FINNHUB_KEY,
-      dateRange: {from:today, to},
-      totalReturned: raw?.earningsCalendar?.length||0,
-      sample: raw?.earningsCalendar?.slice(0,5)||[],
-      rawResponse: raw,
-    });
-  } catch(e) { res.status(500).json({error:e.message}); }
-});
 app.get('/analytics',(req,res)=>res.json(getPerformanceAnalytics()||{}));
 app.get('/agent-stats',(req,res)=>getAgentStats().then(d=>res.json(d)).catch(()=>res.json([])));
 app.get('/regime',      (req, res) => res.json(currentRegime));
