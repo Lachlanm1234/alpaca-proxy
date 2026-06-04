@@ -636,6 +636,150 @@ async function getTechnicalAnalysis(ticker) {
   };
 }
 
+// ── AI CIO REPORT ENGINE ─────────────────────────────────────────
+// Generates a real-time portfolio assessment and action plan
+// Runs after morning briefing and on-demand. Cheap: no web search.
+
+let cioReport = null;
+
+async function generateCIOReport() {
+  try {
+    const [positions, account] = await Promise.all([
+      alpaca('/v2/positions'),
+      alpaca('/v2/account'),
+    ]);
+
+    const portfolioValue = parseFloat(account.portfolio_value || 100000);
+    const startValue = 100000;
+    const totalReturn = ((portfolioValue - startValue) / startValue * 100).toFixed(2);
+    const concentration = await analyzePortfolioConcentration();
+    const rankings = rankOpportunities();
+    const analytics = getPerformanceAnalytics();
+    const regime = currentRegime;
+    const openCount = Array.isArray(positions) ? positions.length : 0;
+
+    // ── Portfolio Score (0-100) ──
+    let score = 65;
+    // Regime bonus/penalty
+    if (['BULL','RISK_ON'].includes(regime.regime)) score += 8;
+    else if (['BEAR','RISK_OFF'].includes(regime.regime)) score -= 12;
+    // Diversification
+    if (concentration.hasPositions) {
+      if (concentration.concentrationScore < 20) score += 10;
+      else if (concentration.concentrationScore >= 50) score -= 20;
+      else if (concentration.concentrationScore >= 35) score -= 10;
+    } else { score += 5; } // No positions = no concentration risk
+    // Performance
+    if (analytics) {
+      if (analytics.winRate >= 65) score += 10;
+      else if (analytics.winRate >= 50) score += 5;
+      else if (analytics.winRate < 40) score -= 10;
+    }
+    // Position count
+    if (openCount > 10) score -= 5;
+    else if (openCount >= 5 && openCount <= 8) score += 3;
+    // Return
+    const ret = parseFloat(totalReturn);
+    if (ret > 5) score += 8;
+    else if (ret > 0) score += 3;
+    else if (ret < -5) score -= 10;
+
+    score = Math.min(99, Math.max(10, Math.round(score)));
+    const riskLevel = score >= 75 ? 'LOW' : score >= 55 ? 'MODERATE' : 'HIGH';
+
+    // ── Biggest Risk ──
+    let biggestRisk = 'No significant concentration risk';
+    if (concentration.hasPositions && concentration.sectors && concentration.sectors.length > 0) {
+      const top = concentration.sectors[0];
+      if (top.pct >= 40) biggestRisk = top.name + ' at ' + top.pct + '% of portfolio — dangerously concentrated';
+      else if (top.pct >= 25) biggestRisk = top.name + ' concentration at ' + top.pct + '%';
+    }
+    if (['BEAR','RISK_OFF'].includes(regime.regime) && openCount > 5) {
+      biggestRisk = 'Market in ' + regime.label + ' with ' + openCount + ' open positions — consider reducing exposure';
+    }
+
+    // ── Best Opportunity ──
+    const topSignal = rankings[0];
+    const bestOpp = topSignal
+      ? { ticker: topSignal.ticker, score: topSignal.rankScore, signal: topSignal.signal, catalyst: topSignal.catalyst }
+      : null;
+
+    // ── Generate recommendations (cheap Claude call, no web search) ──
+    let recommendations = [];
+    let analysis = '';
+
+    const positionSummary = Array.isArray(positions) && positions.length
+      ? positions.map(p => {
+          const pnl = (parseFloat(p.unrealized_plpc)*100).toFixed(1);
+          return p.symbol + '(' + pnl + '%)';
+        }).join(', ')
+      : 'No open positions';
+
+    const sectorSummary = concentration.hasPositions && concentration.sectors
+      ? concentration.sectors.map(s => s.name + ':' + s.pct + '%').join(', ')
+      : 'No positions';
+
+    const prompt = `You are an AI Chief Investment Officer. Assess this portfolio and give specific actions.
+Positions: ${positionSummary}
+Sector exposure: ${sectorSummary}
+Market regime: ${regime.label}
+Portfolio score: ${score}/100
+Risk level: ${riskLevel}
+Best signal available: ${bestOpp ? bestOpp.ticker + ' (' + bestOpp.catalyst + ')' : 'None'}
+Performance: ${analytics ? analytics.winRate + '% win rate, ' + analytics.totalTrades + ' trades' : 'No history'}
+Provide 2-3 specific, actionable recommendations (max 90 chars each).
+Return ONLY JSON: {"recommendations":["Specific action 1","Specific action 2","Specific action 3"],"analysis":"One clear sentence on portfolio health"}`;
+
+    try {
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json','x-api-key':ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001', max_tokens: 250,
+          system: prompt + '\n\nReturn ONLY valid JSON.',
+          messages: [{ role: 'user', content: 'Portfolio assessment' }]
+        })
+      });
+      const d = await r.json();
+      const text = d.content.map(b => b.type==='text'?b.text:'').join('');
+      const match = text.match(/\{[\s\S]*\}/);
+      if (match) {
+        const res = JSON.parse(match[0]);
+        recommendations = res.recommendations || [];
+        analysis = res.analysis || '';
+      }
+    } catch(e) {
+      recommendations = [
+        regime.riskMultiplier < 1 ? 'Reduce position sizes — current regime suggests caution' : 'Regime is '+regime.label+' — maintain current strategy',
+        bestOpp ? 'Top opportunity: '+bestOpp.ticker+' with rank score '+bestOpp.score : 'Run a scan to find new opportunities',
+      ];
+    }
+
+    cioReport = {
+      portfolioScore: score,
+      portfolioRisk: riskLevel,
+      regime: regime.label,
+      regimeType: regime.regime,
+      biggestRisk,
+      bestOpportunity: bestOpp,
+      recommendations,
+      analysis,
+      portfolioValue,
+      totalReturnPct: parseFloat(totalReturn),
+      openPositions: openCount,
+      generatedAt: new Date().toISOString(),
+    };
+
+    log('INTEL', '🎯 CIO Report: Score '+score+'/100 | '+riskLevel+' risk | '+regime.label+' | '+analysis, {
+      portfolioScore: score, portfolioRisk: riskLevel
+    });
+    return cioReport;
+  } catch(e) {
+    log('ERROR', 'CIO report failed: '+e.message);
+    return null;
+  }
+}
+
 // ── MARKET REGIME ENGINE ─────────────────────────────────────────
 // Detects current market regime from real data: VIX, SPY trend,
 // sector rotation, momentum. Adjusts all trading behaviour accordingly.
@@ -1685,6 +1829,8 @@ All strings under 100 chars. Return ONLY JSON.`;
     log('INTEL','☀️ '+(result.greeting||'Morning briefing ready'),{marketRegime:result.marketRegime});
     if(result.topIdea) log('INTEL','💡 Top idea: '+result.topIdea.ticker+' — '+result.topIdea.catalyst,{ticker:result.topIdea.ticker});
     (result.topWatches||[]).forEach(w=>log('INTEL','👀 Watch: '+w.ticker+' — '+w.reason,{ticker:w.ticker,bias:w.bias}));
+    // Generate CIO report after briefing
+    setTimeout(generateCIOReport, 5000);
   }catch(e){log('ERROR','Morning briefing failed: '+e.message);}
   state.status='IDLE';
 }
@@ -2154,6 +2300,8 @@ app.get('/watchlists',(req,res)=>res.json(watchlists));
 app.get('/briefing',(req,res)=>res.json(morningBriefing||{message:'No briefing yet. Runs at 9am ET.'}));
 app.get('/tradedna',(req,res)=>res.json({summary:getTradeDNASummary(),trades:tradeDNA.slice(-50),totalTrades:tradeDNA.length,winRate:tradeDNA.length>0?Math.round(tradeDNA.filter(t=>t.profitable).length/tradeDNA.length*100):0}));
 app.get('/health',(req,res)=>res.json({ok:true,uptime:process.uptime(),dbConnected:!!DB}));
+app.get('/cio-report',(req,res)=>res.json(cioReport||{message:'No report yet. Runs at 9am or trigger manually.'}));
+app.post('/cio-now',(req,res)=>{res.json({message:'CIO report generating...'});generateCIOReport();});
 
 // ── TRADE LOG — pulls full order history from Alpaca ──────────────
 app.get('/trade-log', async (req, res) => {
