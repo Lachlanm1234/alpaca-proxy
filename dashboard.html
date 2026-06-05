@@ -333,13 +333,14 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 const B='https://alpaca-proxy-s3m9.onrender.com';
 let cp='dashboard', allO=[];
 
+function navOpp(){go('opportunities',document.querySelector('[onclick*=opportunities]'));}
 function go(p,btn){
   document.querySelectorAll('.page').forEach(e=>e.classList.remove('active'));
   document.querySelectorAll('.ni').forEach(e=>e.classList.remove('active'));
   const el=document.getElementById('page-'+p);
   if(el) el.classList.add('active');
   if(btn) btn.classList.add('active');
-  else{const b=document.querySelector('[onclick*="go(''+p+''"]'); if(b) b.classList.add('active');}
+  // nav handled by onclick
   cp=p; closeSb();
   if(p==='opportunities') loadOpp();
   else if(p==='portfolio'){loadPos();loadConc();loadSh();}
@@ -445,7 +446,7 @@ async function loadSigs(){
     st('nb',items?.length||0);
     if(!items||!items.length){si('top-opp','<div class="empty" style="padding:16px 0"><div class="empty-icon" style="font-size:20px">&#127919;</div><div class="empty-t" style="font-size:12px">No signals</div><div style="font-size:11px;color:var(--text3)">Tap Scan</div></div>');return;}
     const top=items[0],conv=top.conviction||{},hs=conv.historicalSimilarity||{},color=lc(top.ticker||'');
-    si('top-opp','<div style="display:flex;align-items:center;gap:9px;margin-bottom:10px"><div style="width:42px;height:42px;border-radius:11px;background:'+color+'22;color:'+color+';display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;flex-shrink:0">'+( top.ticker||'').substring(0,2)+'</div><div style="flex:1"><div style="font-size:17px;font-weight:800">'+top.ticker+'</div><div style="font-size:11px;color:var(--purple2);margin-top:2px">'+(top.catalyst||'')+'</div></div>'+sigB(top.signal)+'</div><div class="opp-m"><div class="opp-mi"><div class="opp-ml">Expected</div><div class="opp-mv" style="color:var(--green)">'+(conv.expectedReturn||top.expectedReturn||'--')+'</div></div><div class="opp-mi"><div class="opp-ml">Probability</div><div class="opp-mv">'+(conv.probability||'--')+'%</div></div><div class="opp-mi"><div class="opp-ml">Worst Case</div><div class="opp-mv" style="color:var(--red)">'+(conv.worstCase||'--')+'</div></div><div class="opp-mi"><div class="opp-ml">Similarity</div><div class="opp-mv" style="color:var(--purple2)">'+(hs.hasSimilarity?hs.similarityScore+'%':'--')+'</div></div></div><button class="view-btn" onclick="go('opportunities',document.querySelector('[onclick*=opportunities]'))">View Full Analysis &#8594;</button>');
+    si('top-opp','<div style="display:flex;align-items:center;gap:9px;margin-bottom:10px"><div style="width:42px;height:42px;border-radius:11px;background:'+color+'22;color:'+color+';display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;flex-shrink:0">'+( top.ticker||'').substring(0,2)+'</div><div style="flex:1"><div style="font-size:17px;font-weight:800">'+top.ticker+'</div><div style="font-size:11px;color:var(--purple2);margin-top:2px">'+(top.catalyst||'')+'</div></div>'+sigB(top.signal)+'</div><div class="opp-m"><div class="opp-mi"><div class="opp-ml">Expected</div><div class="opp-mv" style="color:var(--green)">'+(conv.expectedReturn||top.expectedReturn||'--')+'</div></div><div class="opp-mi"><div class="opp-ml">Probability</div><div class="opp-mv">'+(conv.probability||'--')+'%</div></div><div class="opp-mi"><div class="opp-ml">Worst Case</div><div class="opp-mv" style="color:var(--red)">'+(conv.worstCase||'--')+'</div></div><div class="opp-mi"><div class="opp-ml">Similarity</div><div class="opp-mv" style="color:var(--purple2)">'+(hs.hasSimilarity?hs.similarityScore+'%':'--')+'</div></div></div><button class="view-btn" id=\"vopp\" onclick=\"navOpp()">View Full Analysis &#8594;</button>');
   }catch(e){}
 }
 
