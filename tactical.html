@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Tactical Trading — Market Intelligence</title>
+<style>
+:root{--bg:#090c14;--bg2:#0f1320;--card:#141927;--card2:#1a2035;--border:rgba(255,255,255,0.06);--border2:rgba(255,255,255,0.1);--purple:#7c6aff;--pd:rgba(124,106,255,0.15);--green:#22c55e;--gd:rgba(34,197,94,0.12);--red:#ef4444;--rd:rgba(239,68,68,0.12);--amber:#f59e0b;--ad:rgba(245,158,11,0.12);--blue:#3b82f6;--bd:rgba(59,130,246,0.12);--text:#e8eaf0;--t2:#8891a8;--t3:#404860;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;min-height:100vh;}
+.topbar{background:var(--bg2);border-bottom:1px solid var(--border);padding:0 20px;height:52px;display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:0;z-index:100;}
+.tb-left{display:flex;align-items:center;gap:12px;}
+.tb-logo{font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px;}
+.tb-badge{font-size:10px;font-weight:700;padding:3px 9px;border-radius:12px;background:var(--rd);color:var(--red);border:1px solid rgba(239,68,68,.25);letter-spacing:.5px;}
+.tb-status{font-size:11px;font-weight:600;padding:3px 10px;border-radius:12px;}
+.status-off{background:rgba(255,255,255,.05);color:var(--t2);}
+.status-active{background:var(--gd);color:var(--green);border:1px solid rgba(34,197,94,.2);}
+.status-scanning{background:var(--ad);color:var(--amber);border:1px solid rgba(245,158,11,.2);animation:pulse 1.5s infinite;}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.tb-right{display:flex;align-items:center;gap:8px;}
+.btn{padding:7px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:none;font-family:inherit;transition:all .12s;}
+.btn-primary{background:var(--purple);color:#fff;}
+.btn-danger{background:var(--rd);color:var(--red);border:1px solid rgba(239,68,68,.25);}
+.btn-ghost{background:rgba(255,255,255,.05);color:var(--t2);border:1px solid var(--border);}
+.btn-green{background:var(--gd);color:var(--green);border:1px solid rgba(34,197,94,.2);}
+.btn:disabled{opacity:.5;cursor:not-allowed;}
+a.back{font-size:12px;color:var(--t2);text-decoration:none;display:flex;align-items:center;gap:5px;}
+a.back:hover{color:var(--text);}
+.main{padding:20px;max-width:1400px;margin:0 auto;}
+.grid{display:grid;gap:12px;}
+.g2{grid-template-columns:1fr 1fr;}
+.g3{grid-template-columns:repeat(3,1fr);}
+.g4{grid-template-columns:repeat(4,1fr);}
+.g5{grid-template-columns:repeat(5,1fr);}
+.mb{margin-bottom:12px;}
+.card{background:var(--card);border:1px solid var(--border);border-radius:13px;padding:16px;}
+.card-label{font-size:9px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;}
+.stat-big{font-size:28px;font-weight:800;letter-spacing:-.5px;}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:11px;padding:14px;text-align:center;}
+.stat-label{font-size:9px;color:var(--t2);text-transform:uppercase;letter-spacing:.5px;margin-top:3px;}
+.stat-sub{font-size:11px;color:var(--t2);margin-top:2px;}
+
+/* Signal Cards */
+.sig-card{background:var(--card);border:1px solid var(--border);border-radius:13px;padding:16px;margin-bottom:10px;position:relative;overflow:hidden;}
+.sig-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:3px 0 0 3px;}
+.sig-card.LONG::before{background:var(--green);}
+.sig-card.SHORT::before{background:var(--red);}
+.sig-type-badge{font-size:9px;font-weight:700;padding:2px 8px;border-radius:4px;letter-spacing:.8px;text-transform:uppercase;}
+.type-ORB{background:rgba(59,130,246,.15);color:var(--blue);}
+.type-VWAP{background:var(--pd);color:#a092ff;}
+.type-MOMENTUM{background:var(--gd);color:var(--green);}
+.type-REVERSAL{background:var(--ad);color:var(--amber);}
+.dir-badge{font-size:10px;font-weight:700;padding:3px 9px;border-radius:5px;}
+.dir-LONG{background:var(--gd);color:var(--green);border:1px solid rgba(34,197,94,.2);}
+.dir-SHORT{background:var(--rd);color:var(--red);border:1px solid rgba(239,68,68,.2);}
+.sig-ticker{font-size:20px;font-weight:800;letter-spacing:-.3px;}
+.sig-metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin:12px 0;}
+.sig-metric{background:var(--card2);border-radius:8px;padding:8px;text-align:center;}
+.sig-metric-label{font-size:8px;color:var(--t2);text-transform:uppercase;letter-spacing:.4px;}
+.sig-metric-val{font-size:14px;font-weight:800;margin-top:3px;}
+.prob-bar{height:5px;background:rgba(255,255,255,.06);border-radius:3px;margin:6px 0;}
+.prob-fill{height:100%;border-radius:3px;}
+.agents-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;}
+.agent-vote{display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:7px;font-size:11px;font-weight:600;}
+.av-BUY{background:var(--gd);color:var(--green);}
+.av-SKIP{background:rgba(255,255,255,.05);color:var(--t2);}
+.av-FADE{background:var(--rd);color:var(--red);}
+.agent-dot{width:5px;height:5px;border-radius:50%;}
+.ad-BUY{background:var(--green);}
+.ad-SKIP{background:var(--t3);}
+.ad-FADE{background:var(--red);}
+.targets-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px;}
+.target-box{background:var(--card2);border-radius:8px;padding:8px;text-align:center;}
+.target-label{font-size:8px;color:var(--t2);text-transform:uppercase;letter-spacing:.4px;}
+.target-val{font-size:15px;font-weight:800;margin-top:3px;}
+.sig-actions{display:flex;gap:7px;margin-top:12px;}
+.exec-input{background:var(--card2);border:1px solid var(--border2);color:var(--text);padding:6px 10px;border-radius:7px;font-size:12px;width:90px;font-family:inherit;}
+.exec-result{font-size:11px;padding:5px 9px;border-radius:6px;margin-top:6px;}
+.exec-ok{background:var(--gd);color:var(--green);}
+.exec-err{background:var(--rd);color:var(--red);}
+
+/* Log */
+.log-row{display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);}
+.log-row:last-child{border-bottom:none;}
+.log-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;margin-top:4px;}
+.log-msg{font-size:12px;flex:1;line-height:1.4;}
+.log-time{font-size:10px;color:var(--t3);flex-shrink:0;}
+
+/* Trades table */
+.tbl{width:100%;border-collapse:collapse;}
+.tbl th{font-size:9px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.8px;padding:7px 9px;text-align:left;border-bottom:1px solid var(--border);}
+.tbl td{padding:9px;border-bottom:1px solid rgba(255,255,255,.03);vertical-align:middle;font-size:12px;}
+.tbl tr:last-child td{border-bottom:none;}
+
+/* Warning banner */
+.warning-banner{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:10px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:10px;font-size:12px;}
+
+/* Empty */
+.empty{text-align:center;padding:40px 16px;color:var(--t3);}
+.empty-icon{font-size:32px;margin-bottom:10px;}
+.empty-t{font-size:14px;font-weight:600;color:var(--t2);margin-bottom:4px;}
+
+/* Scanner type selector */
+.scanner-tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;}
+.scanner-tab{font-size:11px;font-weight:600;padding:5px 13px;border-radius:20px;cursor:pointer;border:1px solid var(--border);background:rgba(255,255,255,.04);color:var(--t2);font-family:inherit;}
+.scanner-tab.active{background:var(--pd);color:#a092ff;border-color:rgba(124,106,255,.3);}
+
+@media(max-width:768px){.g2,.g3,.g4,.g5{grid-template-columns:1fr}.sig-metrics{grid-template-columns:repeat(3,1fr)}.targets-row{grid-template-columns:1fr}.tb-right .btn-ghost{display:none}}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="tb-left">
+    <a class="back" href="/dashboard.html">&#8592; Main Dashboard</a>
+    <span style="color:var(--border2)">|</span>
+    <div class="tb-logo">&#9889; Tactical Trading</div>
+    <span class="tb-badge">INTRADAY ONLY</span>
+    <span class="tb-status status-off" id="mod-status">INACTIVE</span>
+  </div>
+  <div class="tb-right">
+    <span id="market-status" style="font-size:11px;color:var(--t2)">Checking market...</span>
+    <button class="btn btn-danger" id="close-all-btn" onclick="closeAll()" style="display:none">&#10006; Close All Now</button>
+    <button class="btn btn-primary" id="scan-btn" onclick="startScan()">&#9889; Run Tactical Scan</button>
+    <button class="btn btn-ghost" onclick="loadAll()">&#8635;</button>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- WARNING BANNER -->
+  <div class="warning-banner">
+    <span style="font-size:18px">&#9888;</span>
+    <div>
+      <b style="color:var(--red)">Intraday Module — All positions auto-close at 3:45 PM ET.</b>
+      Tactical trades are isolated from your swing portfolio. Performance tracked separately. Approve manually to hold overnight.
+    </div>
+  </div>
+
+  <!-- STATS ROW -->
+  <div class="grid g5 mb">
+    <div class="stat-card"><div class="stat-big" id="st-signals" style="color:var(--purple)">--</div><div class="stat-label">Active Signals</div></div>
+    <div class="stat-card"><div class="stat-big" id="st-pnl" style="color:var(--green)">$--</div><div class="stat-label">Today's P&L</div><div class="stat-sub" id="st-winrate">-- win rate</div></div>
+    <div class="stat-card"><div class="stat-big" id="st-trades">--</div><div class="stat-label">Trades Today</div></div>
+    <div class="stat-card"><div class="stat-big" id="st-last-scan" style="font-size:14px;color:var(--t2)">Never</div><div class="stat-label">Last Scan</div></div>
+    <div class="stat-card"><div class="stat-big" id="st-close-in" style="font-size:16px;color:var(--amber)">--</div><div class="stat-label">Auto-close In</div></div>
+  </div>
+
+  <div class="grid g2">
+    <!-- LEFT: SIGNALS -->
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div style="font-size:16px;font-weight:700;">Ranked Opportunities</div>
+        <div id="scan-progress" style="font-size:11px;color:var(--amber);display:none">&#9881; Scanning...</div>
+      </div>
+      <div class="scanner-tabs">
+        <button class="scanner-tab active" onclick="filterSigs('all',this)">All</button>
+        <button class="scanner-tab" onclick="filterSigs('ORB',this)">ORB</button>
+        <button class="scanner-tab" onclick="filterSigs('VWAP',this)">VWAP</button>
+        <button class="scanner-tab" onclick="filterSigs('MOMENTUM',this)">Momentum</button>
+        <button class="scanner-tab" onclick="filterSigs('REVERSAL',this)">Reversal</button>
+        <button class="scanner-tab" onclick="filterSigs('LONG',this)">Longs</button>
+        <button class="scanner-tab" onclick="filterSigs('SHORT',this)">Shorts</button>
+      </div>
+      <div id="signals-list">
+        <div class="empty"><div class="empty-icon">&#9889;</div><div class="empty-t">No signals yet</div><div style="font-size:12px;color:var(--t3)">Tap Run Tactical Scan to start</div></div>
+      </div>
+    </div>
+
+    <!-- RIGHT: LOG + TRADES -->
+    <div>
+      <!-- Activity Log -->
+      <div class="card mb">
+        <div class="card-label">Tactical Activity Log</div>
+        <div id="tac-log">
+          <div class="empty" style="padding:20px 0"><div style="font-size:12px;color:var(--t3)">Log appears after first scan</div></div>
+        </div>
+      </div>
+
+      <!-- Today's Trades -->
+      <div class="card">
+        <div class="card-label">Today's Closed Trades</div>
+        <div id="tac-trades">
+          <div class="empty" style="padding:16px 0"><div style="font-size:12px;color:var(--t3)">No closed trades yet</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const B = 'https://alpaca-proxy-s3m9.onrender.com';
+let allSignals = [], activeFilter = 'all';
+
+// Helpers
+const ago = iso => { if(!iso) return '--'; const d=Math.floor((Date.now()-new Date(iso))/1000); if(d<60) return d+'s ago'; if(d<3600) return Math.floor(d/60)+'m ago'; return Math.floor(d/3600)+'h ago'; };
+const fmt = n => '$' + parseFloat(n||0).toFixed(2);
+const lc = t => { const c=['#7c6aff','#22c55e','#3b82f6','#ef4444','#f59e0b','#8b5cf6']; let h=0; for(let i=0;i<t.length;i++) h+=t.charCodeAt(i); return c[h%c.length]; };
+const si = (id,v) => { const e=document.getElementById(id); if(e) e.innerHTML=v; };
+const st = (id,v) => { const e=document.getElementById(id); if(e) e.textContent=v; };
+
+// Market close countdown
+function updateCountdown() {
+  const now = new Date();
+  const etHour = now.getUTCHours() - 4;
+  const etMin  = now.getUTCMinutes();
+  const totalMins = etHour * 60 + etMin;
+  const closeAt   = 15 * 60 + 45; // 3:45 PM ET
+  const remaining = closeAt - totalMins;
+  const el = document.getElementById('st-close-in');
+  const ms = document.getElementById('market-status');
+  if (remaining <= 0) {
+    if(el){ el.textContent='CLOSED'; el.style.color='var(--red)'; }
+    if(ms){ ms.textContent='Market closed'; ms.style.color='var(--red)'; }
+  } else if (remaining < 30) {
+    const h = Math.floor(remaining/60), m = remaining%60;
+    if(el){ el.textContent=(h>0?h+'h ':'')+m+'m'; el.style.color='var(--red)'; }
+    if(ms){ ms.textContent='Market open'; ms.style.color='var(--green)'; }
+  } else {
+    const h = Math.floor(remaining/60), m = remaining%60;
+    if(el){ el.textContent=(h>0?h+'h ':'')+m+'m'; el.style.color='var(--amber)'; }
+    if(ms){ ms.textContent='Market open'; ms.style.color='var(--green)'; }
+  }
+}
+
+// Load status
+async function loadStatus() {
+  try {
+    const s = await fetch(B+'/tactical/status').then(r=>r.json());
+    st('st-signals', s.signals || 0);
+    const el = document.getElementById('mod-status');
+    if(el) {
+      if(s.scanRunning){ el.textContent='SCANNING'; el.className='tb-status status-scanning'; }
+      else if(s.signals > 0){ el.textContent='ACTIVE'; el.className='tb-status status-active'; }
+      else{ el.textContent='READY'; el.className='tb-status status-off'; }
+    }
+    if(s.lastScan){ st('st-last-scan', ago(s.lastScan)); }
+    document.getElementById('close-all-btn').style.display = s.signals > 0 ? 'block' : 'none';
+    document.getElementById('scan-progress').style.display = s.scanRunning ? 'block' : 'none';
+  } catch(e){}
+}
+
+// Load signals
+async function loadSignals() {
+  try {
+    const sigs = await fetch(B+'/tactical/signals').then(r=>r.json());
+    allSignals = Array.isArray(sigs) ? sigs : [];
+    st('st-signals', allSignals.length);
+    renderSignals();
+  } catch(e){}
+}
+
+function filterSigs(f, btn) {
+  activeFilter = f;
+  document.querySelectorAll('.scanner-tab').forEach(b => b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  renderSignals();
+}
+
+function renderSignals() {
+  const el = document.getElementById('signals-list');
+  let sigs = allSignals;
+  if(activeFilter !== 'all'){
+    if(['LONG','SHORT'].includes(activeFilter)) sigs = sigs.filter(s => s.direction===activeFilter);
+    else sigs = sigs.filter(s => s.type===activeFilter);
+  }
+  if(!sigs.length){
+    el.innerHTML = '<div class="empty"><div class="empty-icon">&#9889;</div><div class="empty-t">No ' + activeFilter + ' signals</div><div style="font-size:12px;color:var(--t3)">Run a scan to find intraday opportunities</div></div>';
+    return;
+  }
+  el.innerHTML = sigs.map((s, idx) => renderSigCard(s, idx+1)).join('');
+}
+
+function renderSigCard(s, rank) {
+  const col = s.direction==='LONG' ? 'var(--green)' : 'var(--red)';
+  const color = lc(s.ticker);
+  const probColor = s.probability>=70 ? 'var(--green)' : s.probability>=55 ? 'var(--amber)' : 'var(--red)';
+  const rrColor   = s.riskReward>=2.5 ? 'var(--green)' : s.riskReward>=1.5 ? 'var(--amber)' : 'var(--red)';
+
+  let typeDetails = '';
+  if(s.type==='ORB') typeDetails = 'OR High: $'+s.orHigh+' | OR Low: $'+s.orLow+' | OR Range: $'+parseFloat(s.orRange||0).toFixed(2)+(s.breakoutPct?' | Breakout: +'+s.breakoutPct+'%':'');
+  else if(s.type==='VWAP') typeDetails = 'VWAP: $'+s.vwap+' | Distance: '+(s.pctFromVWAP>=0?'+':'')+s.pctFromVWAP+'% | '+(s.vwapCross?'VWAP Cross ':'')+(s.bouncing?'Bounce Setup':'');
+  else if(s.type==='MOMENTUM') typeDetails = '5m: '+(s.move5m>=0?'+':'')+s.move5m+'% | 15m: '+(s.move15m>=0?'+':'')+s.move15m+'% | Vol Surge: '+s.volSurge+'x | RSI: '+s.rsi;
+  else if(s.type==='REVERSAL') typeDetails = 'VWAP dist: '+(s.pctFromVWAP>=0?'+':'')+s.pctFromVWAP+'% | RSI: '+s.rsi+(s.reversalCandle?' | Reversal candle':'');
+
+  const agentsHTML = (s.agents||[]).map(a => {
+    return '<div class="agent-vote av-'+a.vote+'">' +
+      '<div class="agent-dot ad-'+a.vote+'"></div>' +
+      a.agent + ': ' + a.vote +
+      (a.reason ? ' <span style="font-size:10px;opacity:.7">— '+a.reason+'</span>' : '') +
+      '</div>';
+  }).join('');
+
+  return '<div class="sig-card '+s.direction+'" id="card-'+s.id+'">' +
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">' +
+      '<div style="display:flex;align-items:center;gap:10px">' +
+        '<span style="font-size:15px;font-weight:800;color:'+col+'">#'+rank+'</span>' +
+        '<div style="width:40px;height:40px;border-radius:10px;background:'+color+'22;color:'+color+';display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800">' + s.ticker.substring(0,2) + '</div>' +
+        '<div>' +
+          '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">' +
+            '<span class="sig-ticker">'+s.ticker+'</span>' +
+            '<span class="sig-type-badge type-'+s.type+'">'+s.type+'</span>' +
+            '<span class="dir-badge dir-'+s.direction+'">'+s.direction+'</span>' +
+            (s.relVol && s.relVol > 2 ? '<span style="font-size:9px;font-weight:700;background:var(--ad);color:var(--amber);padding:2px 7px;border-radius:3px">'+s.relVol+'x VOL</span>' : '') +
+          '</div>' +
+          '<div style="font-size:10px;color:var(--t2);margin-top:3px">'+typeDetails+'</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="text-align:right;flex-shrink:0">' +
+        '<div style="font-size:11px;color:var(--t2)">Score</div>' +
+        '<div style="font-size:20px;font-weight:800;color:'+col+'">'+s.signalScore+'</div>' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="sig-metrics">' +
+      '<div class="sig-metric"><div class="sig-metric-label">Win Prob</div><div class="sig-metric-val" style="color:'+probColor+'">'+( s.probability||'--')+'%</div></div>' +
+      '<div class="sig-metric"><div class="sig-metric-label">Entry</div><div class="sig-metric-val">$'+s.entry+'</div></div>' +
+      '<div class="sig-metric"><div class="sig-metric-label">Stop</div><div class="sig-metric-val" style="color:var(--red)">$'+s.stop+'</div></div>' +
+      '<div class="sig-metric"><div class="sig-metric-label">Target</div><div class="sig-metric-val" style="color:var(--green)">$'+s.target1+'</div></div>' +
+      '<div class="sig-metric"><div class="sig-metric-label">R/R</div><div class="sig-metric-val" style="color:'+rrColor+'">'+s.riskReward+'</div></div>' +
+    '</div>' +
+
+    '<div class="prob-bar"><div class="prob-fill" style="width:'+(s.probability||0)+'%;background:'+probColor+'"></div></div>' +
+
+    (s.expectedMove ? '<div style="font-size:11px;color:var(--t2);margin-bottom:8px">Expected move: <b style="color:var(--text)">'+s.expectedMove+'</b> | Agents: <b>'+s.agentSummary+'</b></div>' : '') +
+
+    (agentsHTML ? '<div class="agents-row">'+agentsHTML+'</div>' : '') +
+
+    (s.vwap ? '<div style="display:flex;gap:12px;margin-top:8px;font-size:11px;color:var(--t2)"><span>VWAP: <b style="color:var(--text)">$'+s.vwap+'</b></span>'+(s.pctFromVWAP!==undefined?'<span>Dist: <b style="color:'+(s.pctFromVWAP>=0?'var(--green)':'var(--red)')+'">'+( s.pctFromVWAP>=0?'+':'')+s.pctFromVWAP+'%</b></span>':'')+'</div>' : '') +
+
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">' +
+      '<div style="font-size:10px;color:var(--t3)">Found '+ago(s.foundAt)+' | '+s.barsAnalysed+' bars analysed</div>' +
+      '<div style="display:flex;align-items:center;gap:6px">' +
+        '<span style="font-size:11px;color:var(--t2)">$</span>' +
+        '<input class="exec-input" type="number" value="500" min="100" max="2000" id="amt-'+s.id+'">' +
+        '<button class="btn btn-green" style="font-size:11px;padding:6px 12px" onclick="executeTrade(''+s.id+'')">Execute</button>' +
+        '<button class="btn btn-ghost" style="font-size:11px;padding:6px 10px" onclick="dismissSignal(''+s.id+'')">Dismiss</button>' +
+      '</div>' +
+    '</div>' +
+    '<div id="exec-result-'+s.id+'" style="margin-top:5px"></div>' +
+  '</div>';
+}
+
+// Load log
+async function loadLog() {
+  try {
+    const log = await fetch(B+'/tactical/log').then(r=>r.json());
+    const el = document.getElementById('tac-log');
+    if(!log||!log.length){ if(el) el.innerHTML='<div class="empty" style="padding:16px 0"><div style="font-size:12px;color:var(--t3)">Log appears after first scan</div></div>'; return; }
+    const tc = { TACTICAL:'var(--blue)', ERROR:'var(--red)' };
+    el.innerHTML = log.slice(0,20).map(e => {
+      const c = tc[e.type]||'var(--t2)';
+      return '<div class="log-row">' +
+        '<div class="log-dot" style="background:'+c+'"></div>' +
+        '<div class="log-msg">'+e.message+'</div>' +
+        '<div class="log-time">'+ago(e.timestamp)+'</div>' +
+      '</div>';
+    }).join('');
+  } catch(e){}
+}
+
+// Load trades
+async function loadTrades() {
+  try {
+    const data = await fetch(B+'/tactical/trades').then(r=>r.json());
+    const pnl  = data.pnl || {};
+    const trades = data.trades || [];
+
+    st('st-pnl', (pnl.realized>=0?'+':'')+fmt(pnl.realized||0));
+    document.getElementById('st-pnl').style.color = (pnl.realized||0)>=0?'var(--green)':'var(--red)';
+    st('st-trades', pnl.trades||0);
+    st('st-winrate', pnl.trades>0 ? Math.round(pnl.wins/pnl.trades*100)+'% win rate' : '-- win rate');
+
+    const el = document.getElementById('tac-trades');
+    if(!trades.length){ if(el) el.innerHTML='<div class="empty" style="padding:16px 0"><div style="font-size:12px;color:var(--t3)">No closed trades yet</div></div>'; return; }
+    el.innerHTML = '<table class="tbl"><thead><tr><th>Ticker</th><th>Return</th><th>Reason</th><th>Closed</th></tr></thead><tbody>' +
+      trades.map(t => {
+        const col = t.profitable ? 'var(--green)' : 'var(--red)';
+        return '<tr><td><b>'+t.ticker+'</b></td>' +
+          '<td style="font-weight:700;color:'+col+'">'+(t.returnPct>=0?'+':'')+t.returnPct+'%</td>' +
+          '<td style="color:var(--t2);font-size:11px">'+t.reason+'</td>' +
+          '<td style="color:var(--t3);font-size:11px">'+ago(t.closedAt)+'</td></tr>';
+      }).join('') + '</tbody></table>';
+  } catch(e){}
+}
+
+// Execute trade
+async function executeTrade(signalId) {
+  const amtEl = document.getElementById('amt-'+signalId);
+  const dollars = parseInt(amtEl?.value||500);
+  const resEl = document.getElementById('exec-result-'+signalId);
+  if(resEl){ resEl.innerHTML='<div class="exec-result" style="background:var(--ad);color:var(--amber)">Placing order...</div>'; }
+  try {
+    const r = await fetch(B+'/tactical/execute', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ signalId, dollars })
+    }).then(r=>r.json());
+    if(resEl){
+      if(r.success){
+        resEl.innerHTML='<div class="exec-result exec-ok">&#10003; Order placed — '+r.qty+' shares at ~$'+(r.dollars/r.qty).toFixed(2)+'. Auto-closes at 3:45 PM ET.</div>';
+      } else {
+        resEl.innerHTML='<div class="exec-result exec-err">&#10006; '+r.error+'</div>';
+      }
+    }
+  } catch(e){ if(resEl) resEl.innerHTML='<div class="exec-result exec-err">Error: '+e.message+'</div>'; }
+}
+
+// Dismiss signal
+function dismissSignal(id) {
+  allSignals = allSignals.filter(s => s.id !== id);
+  renderSignals();
+}
+
+// Scan
+async function startScan() {
+  const btn = document.getElementById('scan-btn');
+  if(btn){ btn.textContent='Scanning...'; btn.disabled=true; }
+  document.getElementById('scan-progress').style.display='block';
+  try { await fetch(B+'/tactical/scan',{method:'POST'}); } catch(e){}
+  // Poll for results
+  let polls = 0;
+  const poll = setInterval(async () => {
+    polls++;
+    await loadAll();
+    if(polls >= 60){ clearInterval(poll); if(btn){ btn.textContent='&#9889; Run Tactical Scan'; btn.disabled=false; } document.getElementById('scan-progress').style.display='none'; }
+    const status = await fetch(B+'/tactical/status').then(r=>r.json()).catch(()=>({}));
+    if(!status.scanRunning){ clearInterval(poll); if(btn){ btn.textContent='&#9889; Run Tactical Scan'; btn.disabled=false; } document.getElementById('scan-progress').style.display='none'; }
+  }, 3000);
+}
+
+// Close all
+async function closeAll() {
+  if(!confirm('Close ALL tactical positions now?')) return;
+  try { await fetch(B+'/tactical/close-all',{method:'POST'}); setTimeout(loadAll,3000); } catch(e){}
+}
+
+// Load all
+async function loadAll() {
+  await Promise.all([loadStatus(), loadSignals(), loadLog(), loadTrades()]);
+  updateCountdown();
+}
+
+loadAll();
+setInterval(loadAll, 15000);
+setInterval(updateCountdown, 30000);
+</script>
+</body>
+</html>

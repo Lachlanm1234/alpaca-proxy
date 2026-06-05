@@ -2267,6 +2267,8 @@ async function scheduler() {
   if(!['IDLE','MARKET_CLOSED'].includes(state.status)) return;
   const{hhmm,isMarket}=getETTime();
   if(hhmm==='09:00'){await detectMarketRegime();await runMorningBriefing();return;}
+  // Tactical auto-close check
+  await checkTacticalClose();
   if(hhmm==='12:00'){await detectMarketRegime();return;} // Midday regime check
   if(hhmm==='15:30'){await runPreCloseBriefing();return;}
   if(hhmm==='18:00'){await runEarningsPrePositioning();return;}
@@ -2300,6 +2302,613 @@ app.get('/watchlists',(req,res)=>res.json(watchlists));
 app.get('/briefing',(req,res)=>res.json(morningBriefing||{message:'No briefing yet. Runs at 9am ET.'}));
 app.get('/tradedna',(req,res)=>res.json({summary:getTradeDNASummary(),trades:tradeDNA.slice(-50),totalTrades:tradeDNA.length,winRate:tradeDNA.length>0?Math.round(tradeDNA.filter(t=>t.profitable).length/tradeDNA.length*100):0}));
 app.get('/health',(req,res)=>res.json({ok:true,uptime:process.uptime(),dbConnected:!!DB}));
+// ═══════════════════════════════════════════════════════════════════
+// TACTICAL TRADING MODULE — Intraday only, isolated from swing engine
+// ═══════════════════════════════════════════════════════════════════
+
+// ── STATE ─────────────────────────────────────────────────────────
+let tacticalState = {
+  active: false,
+  scanRunning: false,
+  lastScan: null,
+  signals: [],         // Active intraday signals
+  trades: [],          // Today's tactical trades (closed)
+  openPositions: [],   // Currently open tactical positions
+  log: [],
+  pnl: { realized: 0, trades: 0, wins: 0 },
+};
+
+const TACTICAL_UNIVERSE = [
+  'SPY','QQQ','AAPL','NVDA','AMD','MSFT','TSLA','META',
+  'AMZN','GOOGL','JPM','BAC','NFLX','PLTR','COIN','MARA',
+  'XLF','XLE','GLD','SOFI','RIVN','LCID','SNAP','UBER',
+];
+
+// Max position size for tactical trades (smaller than swing)
+const TACTICAL_MAX_DOLLARS = 2000;
+const TACTICAL_STOP_PCT    = 0.005;  // 0.5% stop loss (tight for intraday)
+const TACTICAL_TARGET_MULT = 2.0;    // 2:1 reward/risk default
+const TACTICAL_CLOSE_HOUR  = 15;     // Close all positions at 3:45 PM ET
+const TACTICAL_CLOSE_MIN   = 45;
+
+function tlog(type, msg, data) {
+  const entry = { type, message: msg, timestamp: new Date().toISOString(), ...data };
+  tacticalState.log.unshift(entry);
+  if (tacticalState.log.length > 200) tacticalState.log = tacticalState.log.slice(0, 200);
+  console.log('[TACTICAL]', type, msg);
+}
+
+// ── INTRADAY DATA ─────────────────────────────────────────────────
+async function getIntradayBars(ticker, timeframe) {
+  timeframe = timeframe || '1Min';
+  try {
+    // Get today's date in ET (approximate — use UTC-4 for EDT)
+    const now = new Date();
+    const etOffset = 4 * 60 * 60 * 1000; // EDT offset
+    const etNow = new Date(now.getTime() - etOffset);
+    const todayDate = etNow.toISOString().split('T')[0];
+    const start = todayDate + 'T09:30:00';
+
+    const r = await fetch(
+      ALPACA_DATA + '/v2/stocks/' + ticker + '/bars?timeframe=' + timeframe +
+      '&start=' + todayDate + 'T13:30:00Z&limit=400&adjustment=raw',
+      { headers: { 'APCA-API-KEY-ID': ALPACA_KEY, 'APCA-API-SECRET-KEY': ALPACA_SECRET } }
+    );
+    const d = await r.json();
+    return Array.isArray(d.bars) ? d.bars : [];
+  } catch(e) {
+    return [];
+  }
+}
+
+// ── VWAP CALCULATOR ───────────────────────────────────────────────
+function calcVWAP(bars) {
+  if (!bars || !bars.length) return null;
+  let cumTPV = 0, cumVol = 0;
+  bars.forEach(b => {
+    const tp = (b.h + b.l + b.c) / 3;
+    cumTPV += tp * (b.v || 0);
+    cumVol += (b.v || 0);
+  });
+  return cumVol > 0 ? cumTPV / cumVol : null;
+}
+
+// ── OPENING RANGE BREAKOUT ─────────────────────────────────────────
+async function detectORB(ticker) {
+  try {
+    const bars = await getIntradayBars(ticker, '1Min');
+    if (bars.length < 10) return null;
+
+    // First 30 bars = Opening Range (9:30-10:00 AM ET)
+    const orBars = bars.slice(0, 30);
+    const restBars = bars.slice(30);
+    if (!restBars.length) return null;
+
+    const orHigh = Math.max(...orBars.map(b => b.h));
+    const orLow  = Math.min(...orBars.map(b => b.l));
+    const orRange = orHigh - orLow;
+    const orMidpoint = (orHigh + orLow) / 2;
+
+    // Current candle
+    const current = bars[bars.length - 1];
+    const currentPrice = current.c;
+    const vwap = calcVWAP(bars);
+
+    // Volume confirmation
+    const orVolume    = orBars.reduce((s, b) => s + b.v, 0);
+    const avgBarVol   = orVolume / orBars.length;
+    const recentVol   = restBars.slice(-5).reduce((s, b) => s + b.v, 0) / 5;
+    const volConfirmed = recentVol > avgBarVol * 1.3;
+
+    // Breakout check — price above OR high with volume
+    const isBreakout  = currentPrice > orHigh && volConfirmed;
+    const isBreakdown = currentPrice < orLow  && volConfirmed;
+
+    if (!isBreakout && !isBreakdown) return null;
+
+    const direction = isBreakout ? 'LONG' : 'SHORT';
+    const entry     = currentPrice;
+    const stop      = isBreakout ? orHigh - (orRange * 0.3) : orLow + (orRange * 0.3);
+    const target1   = isBreakout ? orHigh + orRange : orLow - orRange;
+    const target2   = isBreakout ? orHigh + (orRange * 2) : orLow - (orRange * 2);
+    const rr        = Math.abs(target1 - entry) / Math.abs(entry - stop);
+    const breakoutPct = Math.abs((currentPrice - (isBreakout ? orHigh : orLow)) / entry * 100);
+
+    // Require price not too extended past OR
+    if (breakoutPct > 2.5) return null;
+
+    return {
+      type: 'ORB',
+      ticker,
+      direction,
+      entry:   parseFloat(entry.toFixed(2)),
+      stop:    parseFloat(stop.toFixed(2)),
+      target1: parseFloat(target1.toFixed(2)),
+      target2: parseFloat(target2.toFixed(2)),
+      orHigh:  parseFloat(orHigh.toFixed(2)),
+      orLow:   parseFloat(orLow.toFixed(2)),
+      orRange: parseFloat(orRange.toFixed(4)),
+      vwap:    vwap ? parseFloat(vwap.toFixed(2)) : null,
+      vwapDistance: vwap ? parseFloat(((currentPrice - vwap) / vwap * 100).toFixed(2)) : null,
+      riskReward:   parseFloat(rr.toFixed(2)),
+      breakoutPct:  parseFloat(breakoutPct.toFixed(2)),
+      volConfirmed,
+      signalScore:  Math.min(95, 60 + (volConfirmed ? 15 : 0) + (rr > 2 ? 10 : 5) + (vwap && isBreakout && currentPrice > vwap ? 10 : 0)),
+      barsAnalysed: bars.length,
+    };
+  } catch(e) { return null; }
+}
+
+// ── RELATIVE VOLUME SCANNER ────────────────────────────────────────
+async function calcRelativeVolume(ticker) {
+  try {
+    const bars = await getIntradayBars(ticker, '5Min');
+    if (bars.length < 3) return null;
+
+    // Historical daily bars for avg volume
+    const histBars = await fetchPriceBars(ticker, 20);
+    if (!histBars.length) return null;
+
+    const avgDailyVol = histBars.slice(-20).reduce((s, b) => s + b.v, 0) / 20;
+    const todayVol    = bars.reduce((s, b) => s + b.v, 0);
+
+    // Time-adjust: how much of the day has passed
+    const now = new Date();
+    const etHour = now.getUTCHours() - 4;
+    const etMin  = now.getUTCMinutes();
+    const minutesPassed = Math.max(1, (etHour - 9) * 60 + etMin - 30);
+    const dayFraction   = Math.min(1, minutesPassed / 390); // 390 min trading day
+
+    const projectedVol = dayFraction > 0 ? todayVol / dayFraction : todayVol;
+    const relVol       = avgDailyVol > 0 ? projectedVol / avgDailyVol : 1;
+
+    return {
+      ticker,
+      todayVol: Math.round(todayVol),
+      avgDailyVol: Math.round(avgDailyVol),
+      projectedVol: Math.round(projectedVol),
+      relVol: parseFloat(relVol.toFixed(2)),
+      isUnusual: relVol > 2.0,
+      isVeryUnusual: relVol > 3.0,
+    };
+  } catch(e) { return null; }
+}
+
+// ── VWAP ANALYSIS ─────────────────────────────────────────────────
+async function analyzeVWAPSetup(ticker) {
+  try {
+    const bars = await getIntradayBars(ticker, '5Min');
+    if (bars.length < 5) return null;
+
+    const vwap = calcVWAP(bars);
+    if (!vwap) return null;
+
+    const current    = bars[bars.length - 1];
+    const price      = current.c;
+    const pctFromVWAP = (price - vwap) / vwap * 100;
+    const aboveVWAP  = price > vwap;
+
+    // VWAP bounce: price returning to VWAP after being away
+    const prev5     = bars.slice(-6, -1);
+    const avgPrev   = prev5.reduce((s, b) => s + b.c, 0) / prev5.length;
+    const bouncing  = aboveVWAP
+      ? (avgPrev < vwap * 1.005 && price > vwap * 1.002) // bounce off VWAP upward
+      : (avgPrev > vwap * 0.995 && price < vwap * 0.998); // rejection at VWAP
+
+    // VWAP cross
+    const prevPrice  = prev5[prev5.length - 1]?.c || price;
+    const vwapCross  = (prevPrice < vwap && price > vwap) || (prevPrice > vwap && price < vwap);
+
+    if (Math.abs(pctFromVWAP) < 0.1 && !vwapCross && !bouncing) return null;
+
+    const direction = aboveVWAP ? 'LONG' : 'SHORT';
+    const entry     = price;
+    const stop      = aboveVWAP ? vwap * 0.998 : vwap * 1.002;
+    const target    = aboveVWAP
+      ? price + (price - stop) * TACTICAL_TARGET_MULT
+      : price - (stop - price) * TACTICAL_TARGET_MULT;
+    const rr        = Math.abs(target - entry) / Math.abs(entry - stop);
+
+    return {
+      type:         'VWAP',
+      ticker,
+      direction,
+      entry:        parseFloat(entry.toFixed(2)),
+      stop:         parseFloat(stop.toFixed(2)),
+      target1:      parseFloat(target.toFixed(2)),
+      vwap:         parseFloat(vwap.toFixed(2)),
+      pctFromVWAP:  parseFloat(pctFromVWAP.toFixed(2)),
+      aboveVWAP,
+      vwapCross,
+      bouncing,
+      riskReward:   parseFloat(rr.toFixed(2)),
+      signalScore:  Math.min(95,
+        (vwapCross ? 75 : bouncing ? 68 : 55) +
+        (Math.abs(pctFromVWAP) > 0.5 ? 10 : 0) +
+        (rr > 2 ? 5 : 0)
+      ),
+      barsAnalysed: bars.length,
+    };
+  } catch(e) { return null; }
+}
+
+// ── MOMENTUM SCANNER ──────────────────────────────────────────────
+async function detectMomentum(ticker) {
+  try {
+    const bars = await getIntradayBars(ticker, '5Min');
+    if (bars.length < 10) return null;
+
+    const current  = bars[bars.length - 1];
+    const bar5ago  = bars[bars.length - 6];
+    const bar15ago = bars.length > 15 ? bars[bars.length - 16] : bars[0];
+
+    const move5m   = (current.c - bar5ago.c)  / bar5ago.c  * 100;
+    const move15m  = (current.c - bar15ago.c) / bar15ago.c * 100;
+
+    const vwap     = calcVWAP(bars);
+    const rsi      = calcRSI(bars.map(b => b.c), 9); // Fast RSI for intraday
+
+    // Volume surge in last 3 bars
+    const recentBars = bars.slice(-3);
+    const olderBars  = bars.slice(-13, -3);
+    const recentVol  = recentBars.reduce((s, b) => s + b.v, 0) / 3;
+    const olderVol   = olderBars.length ? olderBars.reduce((s, b) => s + b.v, 0) / olderBars.length : recentVol;
+    const volSurge   = olderVol > 0 ? recentVol / olderVol : 1;
+
+    // Qualify momentum
+    const strongMoveUp   = move5m > 0.8  && move15m > 1.2;
+    const strongMoveDown = move5m < -0.8 && move15m < -1.2;
+
+    if (!strongMoveUp && !strongMoveDown) return null;
+    if (volSurge < 1.3) return null; // Need volume confirmation
+
+    const direction = strongMoveUp ? 'LONG' : 'SHORT';
+    const entry     = current.c;
+    const stop      = strongMoveUp
+      ? entry * (1 - TACTICAL_STOP_PCT * 2)
+      : entry * (1 + TACTICAL_STOP_PCT * 2);
+    const target    = strongMoveUp
+      ? entry + (entry - stop) * TACTICAL_TARGET_MULT
+      : entry - (stop - entry) * TACTICAL_TARGET_MULT;
+    const rr        = Math.abs(target - entry) / Math.abs(entry - stop);
+
+    return {
+      type:       'MOMENTUM',
+      ticker,
+      direction,
+      entry:      parseFloat(entry.toFixed(2)),
+      stop:       parseFloat(stop.toFixed(2)),
+      target1:    parseFloat(target.toFixed(2)),
+      vwap:       vwap ? parseFloat(vwap.toFixed(2)) : null,
+      rsi:        rsi,
+      move5m:     parseFloat(move5m.toFixed(2)),
+      move15m:    parseFloat(move15m.toFixed(2)),
+      volSurge:   parseFloat(volSurge.toFixed(2)),
+      riskReward: parseFloat(rr.toFixed(2)),
+      signalScore: Math.min(95,
+        55 +
+        (Math.abs(move5m)  > 1.5 ? 10 : 5) +
+        (Math.abs(move15m) > 2.0 ? 10 : 5) +
+        (volSurge > 2 ? 10 : volSurge > 1.5 ? 5 : 0) +
+        (vwap && direction === 'LONG' && entry > vwap ? 5 : 0) +
+        (rsi && direction === 'LONG' && rsi > 50 && rsi < 75 ? 5 : 0)
+      ),
+      barsAnalysed: bars.length,
+    };
+  } catch(e) { return null; }
+}
+
+// ── REVERSAL SCANNER ──────────────────────────────────────────────
+async function detectReversal(ticker) {
+  try {
+    const bars = await getIntradayBars(ticker, '5Min');
+    if (bars.length < 12) return null;
+
+    const vwap    = calcVWAP(bars);
+    const rsi     = calcRSI(bars.map(b => b.c), 9);
+    const current = bars[bars.length - 1];
+    const prev3   = bars.slice(-4, -1);
+    const price   = current.c;
+
+    if (!vwap || !rsi) return null;
+
+    const pctFromVWAP = (price - vwap) / vwap * 100;
+    const extendedLong  = pctFromVWAP > 2.0 && rsi > 72; // Overbought, extended above VWAP
+    const extendedShort = pctFromVWAP < -2.0 && rsi < 28; // Oversold, extended below VWAP
+
+    if (!extendedLong && !extendedShort) return null;
+
+    // Reversal candle: current bar closing against the trend
+    const prevBarsUp = prev3.every((b, i) => i === 0 || b.c > prev3[i-1].c);
+    const prevBarsDn = prev3.every((b, i) => i === 0 || b.c < prev3[i-1].c);
+    const reversalCandle = extendedLong
+      ? current.c < current.o && current.c < prev3[prev3.length-1].c
+      : current.c > current.o && current.c > prev3[prev3.length-1].c;
+
+    if (!reversalCandle && Math.abs(pctFromVWAP) < 3.0) return null;
+
+    const direction = extendedLong ? 'SHORT' : 'LONG'; // Fade the move
+    const entry     = price;
+    const stop      = extendedLong
+      ? current.h * 1.001  // Stop above candle high
+      : current.l * 0.999; // Stop below candle low
+    const target    = vwap; // Target = VWAP (mean reversion)
+    const rr        = Math.abs(target - entry) / Math.abs(entry - stop);
+
+    if (rr < 1.5) return null; // Not worth it
+
+    return {
+      type:         'REVERSAL',
+      ticker,
+      direction,
+      entry:        parseFloat(entry.toFixed(2)),
+      stop:         parseFloat(stop.toFixed(2)),
+      target1:      parseFloat(target.toFixed(2)),
+      vwap:         parseFloat(vwap.toFixed(2)),
+      rsi:          rsi,
+      pctFromVWAP:  parseFloat(pctFromVWAP.toFixed(2)),
+      reversalCandle,
+      riskReward:   parseFloat(rr.toFixed(2)),
+      signalScore:  Math.min(95,
+        58 +
+        (reversalCandle ? 15 : 0) +
+        (Math.abs(pctFromVWAP) > 3 ? 10 : 5) +
+        (extendedLong ? (rsi > 78 ? 12 : 7) : (rsi < 22 ? 12 : 7))
+      ),
+      barsAnalysed: bars.length,
+    };
+  } catch(e) { return null; }
+}
+
+// ── 4-AGENT INTRADAY COMMITTEE ────────────────────────────────────
+async function runTacticalAgents(signal) {
+  try {
+    const context = [
+      'Type: ' + signal.type,
+      'Ticker: ' + signal.ticker,
+      'Direction: ' + signal.direction,
+      'Entry: $' + signal.entry,
+      'Stop: $' + signal.stop,
+      'Target: $' + signal.target1,
+      'R/R: ' + signal.riskReward,
+      'Signal Score: ' + signal.signalScore,
+      signal.vwap ? 'VWAP: $' + signal.vwap + ' (' + signal.pctFromVWAP + '% away)' : '',
+      signal.rsi  ? 'RSI: ' + signal.rsi : '',
+      signal.volSurge ? 'Volume Surge: ' + signal.volSurge + 'x' : '',
+      signal.move5m ? '5min move: ' + signal.move5m + '%' : '',
+      signal.move15m ? '15min move: ' + signal.move15m + '%' : '',
+    ].filter(Boolean).join('. ');
+
+    const agents = [
+      { name: 'Flow',  focus: 'institutional volume patterns, unusual activity, order flow imbalance' },
+      { name: 'Tape',  focus: 'price action, momentum, trend strength, intraday structure' },
+      { name: 'News',  focus: 'potential catalysts, news events, sector momentum driving the move' },
+      { name: 'Risk',  focus: 'reasons to REJECT this trade — spread risk, false breakout risk, market conditions' },
+    ];
+
+    const votes = [];
+    let buyCount = 0;
+
+    for (const agent of agents) {
+      try {
+        const prompt = 'Intraday ' + signal.direction + ' signal on ' + signal.ticker + '. ' + context + '. ' +
+          'As the ' + agent.name + ' agent focusing only on ' + agent.focus + ': ' +
+          'Vote BUY (take trade), SKIP (pass), or FADE (opposite direction). ' +
+          'Reply ONLY: {"vote":"BUY|SKIP|FADE","confidence":0-100,"reason":"under 60 chars"}';
+
+        const r = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001', max_tokens: 80,
+            messages: [{ role: 'user', content: prompt }]
+          })
+        });
+        const d = await r.json();
+        const text = d.content.map(b => b.type === 'text' ? b.text : '').join('');
+        const match = text.match(/\{[\s\S]*?\}/);
+        if (match) {
+          const res = JSON.parse(match[0]);
+          votes.push({ agent: agent.name, vote: res.vote || 'SKIP', confidence: res.confidence || 50, reason: res.reason || '' });
+          if (res.vote === 'BUY') buyCount++;
+        }
+      } catch(e) {
+        votes.push({ agent: agent.name, vote: 'SKIP', confidence: 50, reason: 'Agent error' });
+      }
+    }
+
+    const consensus = Math.round(buyCount / agents.length * 100);
+    const probability = Math.min(89, signal.signalScore * 0.5 + consensus * 0.5);
+
+    return {
+      votes,
+      consensus,
+      probability: Math.round(probability),
+      buyCount,
+      agentSummary: buyCount + '/' + agents.length + ' agents bullish',
+      expectedMove: signal.direction === 'LONG'
+        ? '$' + signal.entry + ' → $' + signal.target1 + ' (+' + ((signal.target1 - signal.entry) / signal.entry * 100).toFixed(2) + '%)'
+        : '$' + signal.entry + ' → $' + signal.target1 + ' (' + ((signal.target1 - signal.entry) / signal.entry * 100).toFixed(2) + '%)',
+    };
+  } catch(e) {
+    return { votes: [], consensus: 50, probability: 50, buyCount: 0, agentSummary: 'Committee unavailable', expectedMove: '--' };
+  }
+}
+
+// ── MAIN TACTICAL SCAN ────────────────────────────────────────────
+async function runTacticalScan() {
+  if (tacticalState.scanRunning) return;
+  if (!isMarketOpen()) { tlog('TACTICAL', 'Market closed — tactical scan skipped'); return; }
+
+  tacticalState.scanRunning = true;
+  tlog('TACTICAL', 'Starting tactical scan across ' + TACTICAL_UNIVERSE.length + ' symbols...');
+
+  const signals = [];
+
+  // Scan each ticker with all strategies
+  for (const ticker of TACTICAL_UNIVERSE.slice(0, 12)) { // Limit to 12 per scan to control cost
+    await new Promise(r => setTimeout(r, 200)); // Rate limit
+    const [orb, vwap, momentum, reversal, relvol] = await Promise.all([
+      detectORB(ticker),
+      analyzeVWAPSetup(ticker),
+      detectMomentum(ticker),
+      detectReversal(ticker),
+      calcRelativeVolume(ticker),
+    ]);
+
+    const found = [orb, vwap, momentum, reversal].filter(Boolean);
+    for (const signal of found) {
+      if (relvol) signal.relVol = relvol.relVol;
+
+      // Skip if already have a signal for this ticker
+      if (signals.find(s => s.ticker === signal.ticker)) continue;
+
+      // Run agent committee
+      tlog('TACTICAL', 'Running agents on ' + ticker + ' [' + signal.type + ']...');
+      const agentResult = await runTacticalAgents(signal);
+      signal.agents    = agentResult.votes;
+      signal.probability  = agentResult.probability;
+      signal.expectedMove = agentResult.expectedMove;
+      signal.agentSummary = agentResult.agentSummary;
+      signal.consensus    = agentResult.consensus;
+      signal.foundAt      = new Date().toISOString();
+      signal.id           = ticker + '_' + signal.type + '_' + Date.now();
+
+      // Only include if at least 2/4 agents agree
+      if (agentResult.buyCount >= 2) {
+        signals.push(signal);
+        tlog('TACTICAL', '✅ ' + ticker + ' [' + signal.type + '] ' + signal.direction + ' — agents ' + agentResult.agentSummary, { ticker, type: signal.type });
+      } else {
+        tlog('TACTICAL', '⏭ ' + ticker + ' [' + signal.type + '] skipped — only ' + agentResult.buyCount + '/4 agents');
+      }
+    }
+  }
+
+  // Sort by signal score
+  signals.sort((a, b) => b.signalScore - a.signalScore);
+  tacticalState.signals  = signals;
+  tacticalState.lastScan = new Date().toISOString();
+  tacticalState.scanRunning = false;
+
+  tlog('TACTICAL', 'Scan complete — ' + signals.length + ' opportunities found', { count: signals.length });
+  return signals;
+}
+
+// ── TACTICAL TRADE EXECUTION ──────────────────────────────────────
+async function executeTacticalTrade(signalId, dollars) {
+  const signal = tacticalState.signals.find(s => s.id === signalId);
+  if (!signal) return { error: 'Signal not found' };
+  dollars = Math.min(dollars || 1000, TACTICAL_MAX_DOLLARS);
+
+  try {
+    const account = await alpaca('/v2/account');
+    const cash    = parseFloat(account.cash || 0);
+    if (cash < dollars) return { error: 'Insufficient cash: $' + cash.toFixed(0) };
+
+    const qty  = Math.floor(dollars / signal.entry);
+    if (qty < 1) return { error: 'Position too small' };
+    const side = signal.direction === 'LONG' ? 'buy' : 'sell';
+
+    // Tag order as tactical
+    const order = await alpaca('/v2/orders', 'POST', {
+      symbol: signal.ticker, qty, side, type: 'market',
+      time_in_force: 'day', // DAY order — never overnight
+      client_order_id: 'TACTICAL_' + signal.id.substring(0, 20),
+    });
+
+    tlog('TACTICAL', '📈 Tactical ' + side.toUpperCase() + ' ' + signal.ticker + ' x' + qty + ' @ ~$' + signal.entry, {
+      ticker: signal.ticker, dollars, qty, signalId
+    });
+
+    return { success: true, order, qty, dollars: qty * signal.entry };
+  } catch(e) {
+    return { error: e.message };
+  }
+}
+
+// ── AUTO-CLOSE TACTICAL POSITIONS ─────────────────────────────────
+// Called every 5 min — closes all TACTICAL_ tagged positions at 3:45 PM ET
+async function checkTacticalClose() {
+  if (!isMarketOpen()) return;
+
+  const now    = new Date();
+  const etHour = now.getUTCHours() - 4; // EDT
+  const etMin  = now.getUTCMinutes();
+
+  if (etHour !== TACTICAL_CLOSE_HOUR || etMin < TACTICAL_CLOSE_MIN) return;
+
+  tlog('TACTICAL', '⏰ 3:45 PM ET — Auto-closing all tactical positions');
+
+  try {
+    const positions = await alpaca('/v2/positions');
+    if (!Array.isArray(positions)) return;
+
+    const tacticalPositions = positions.filter(p =>
+      p.asset_class !== 'crypto' && // Skip crypto
+      !catalystSignals.find(s => s.ticker === p.symbol) // Not in swing engine
+    );
+
+    for (const pos of tacticalPositions) {
+      try {
+        await alpaca('/v2/positions/' + pos.symbol, 'DELETE', { percentage: 100 });
+        const returnPct = parseFloat(pos.unrealized_plpc) * 100;
+        tacticalState.pnl.realized += parseFloat(pos.unrealized_pl || 0);
+        tacticalState.pnl.trades++;
+        if (returnPct > 0) tacticalState.pnl.wins++;
+        tacticalState.trades.push({
+          ticker: pos.symbol, entryPrice: parseFloat(pos.avg_entry_price),
+          exitPrice: parseFloat(pos.current_price), returnPct: parseFloat(returnPct.toFixed(2)),
+          profitable: returnPct > 0, closedAt: new Date().toISOString(), reason: 'EOD_AUTO_CLOSE'
+        });
+        tlog('TACTICAL', '✅ Closed ' + pos.symbol + ' ' + (returnPct >= 0 ? '+' : '') + returnPct.toFixed(2) + '%', { ticker: pos.symbol });
+      } catch(e) {}
+    }
+  } catch(e) {}
+}
+
+function isMarketOpen() {
+  const now = new Date();
+  const day = now.getUTCDay();
+  if (day === 0 || day === 6) return false;
+  const etHour = now.getUTCHours() - 4;
+  const etMin  = now.getUTCMinutes();
+  const mins   = etHour * 60 + etMin;
+  return mins >= 570 && mins <= 960; // 9:30 to 16:00 ET
+}
+
+// ── TACTICAL ROUTES ───────────────────────────────────────────────
+app.get('/tactical/status',  (req, res) => res.json({ ...tacticalState, signals: tacticalState.signals.length, logCount: tacticalState.log.length }));
+app.get('/tactical/signals', (req, res) => res.json(tacticalState.signals));
+app.get('/tactical/log',     (req, res) => res.json(tacticalState.log.slice(0, 50)));
+app.get('/tactical/trades',  (req, res) => res.json({ trades: tacticalState.trades, pnl: tacticalState.pnl }));
+app.get('/tactical/pnl',     (req, res) => res.json(tacticalState.pnl));
+
+app.post('/tactical/scan', async (req, res) => {
+  if (tacticalState.scanRunning) return res.json({ message: 'Scan already running' });
+  res.json({ message: 'Tactical scan started' });
+  runTacticalScan();
+});
+
+app.post('/tactical/execute', async (req, res) => {
+  const { signalId, dollars } = req.body || {};
+  const result = await executeTacticalTrade(signalId, dollars);
+  res.json(result);
+});
+
+app.post('/tactical/close-all', async (req, res) => {
+  res.json({ message: 'Closing all tactical positions...' });
+  try {
+    const positions = await alpaca('/v2/positions');
+    if (Array.isArray(positions)) {
+      for (const pos of positions) {
+        await alpaca('/v2/positions/' + pos.symbol, 'DELETE', { percentage: 100 }).catch(() => {});
+      }
+    }
+  } catch(e) {}
+});
+
+// Add tactical close check to existing scheduler
+
 app.get('/cio-report',(req,res)=>res.json(cioReport||{message:'No report yet. Runs at 9am or trigger manually.'}));
 app.post('/cio-now',(req,res)=>{res.json({message:'CIO report generating...'});generateCIOReport();});
 
